@@ -1,0 +1,39 @@
+indra\cmake\CMakeLists.txt:60:        Tut.cmake
+indra\cmake\LLAddBuildTest.cmake:17:  # * properties for each sourcefile passed in indicate what libs to link that file with (MAKE NO ASSUMPTIONS ASIDE FROM TUT)
+indra\cmake\LLAddBuildTest.cmake:195:          ${CMAKE_SOURCE_DIR}/test/lltut.cpp
+indra\cmake\LLAddBuildTest.cmake:30:          ${CMAKE_SOURCE_DIR}/test/lltut.cpp
+indra\cmake\LLAddBuildTest.cmake:5:include(Tut)
+indra\cmake\Tut.cmake:4:use_prebuilt_binary(tut)
+indra\cmake\Variables.cmake:161:  # different CMake behavior: it substitutes plain -g. As of 2017-09-19,
+indra\cmake\Variables.cmake:163:  # no-symbols case. Set -gdwarf, triggering CMake to substitute plain -g --
+indra\integration_tests\llui_libtest\CMakeLists.txt:23:# include(Tut)
+indra\llcorehttp\CMakeLists.txt:13:include(Tut)
+indra\llimage\CMakeLists.txt:13:include(Tut)
+indra\llkdu\CMakeLists.txt:50:    include(Tut)
+indra\llkdu\CMakeLists.txt:57:      lltut.h
+indra\llmessage\CMakeLists.txt:11:include(Tut)
+indra\llui\CMakeLists.txt:211:    lltextutil.h
+indra\llui\CMakeLists.txt:90:    lltextutil.cpp
+indra\test\CMakeLists.txt:15:    llapp_tut.cpp
+indra\test\CMakeLists.txt:16:    llblowfish_tut.cpp
+indra\test\CMakeLists.txt:17:    llbuffer_tut.cpp
+indra\test\CMakeLists.txt:18:    lldoubledispatch_tut.cpp
+indra\test\CMakeLists.txt:19:    llevents_tut.cpp
+indra\test\CMakeLists.txt:20:    llhttpdate_tut.cpp
+indra\test\CMakeLists.txt:21:    llhttpnode_tut.cpp
+indra\test\CMakeLists.txt:22:    lliohttpserver_tut.cpp
+indra\test\CMakeLists.txt:23:    llmessageconfig_tut.cpp
+indra\test\CMakeLists.txt:24:    llpermissions_tut.cpp
+indra\test\CMakeLists.txt:26:    llsaleinfo_tut.cpp
+indra\test\CMakeLists.txt:27:    llsdmessagebuilder_tut.cpp
+indra\test\CMakeLists.txt:28:    llsdmessagereader_tut.cpp
+indra\test\CMakeLists.txt:29:    llsd_new_tut.cpp
+indra\test\CMakeLists.txt:30:    llsdutil_tut.cpp
+indra\test\CMakeLists.txt:31:    llservicebuilder_tut.cpp
+indra\test\CMakeLists.txt:32:    llstreamtools_tut.cpp
+indra\test\CMakeLists.txt:33:    lltemplatemessagebuilder_tut.cpp
+indra\test\CMakeLists.txt:34:    lltut.cpp
+indra\test\CMakeLists.txt:35:    message_tut.cpp
+indra\test\CMakeLists.txt:45:    lltut.h
+indra\test\CMakeLists.txt:51:       llmessagetemplateparser_tut.cpp
+indra\test\CMakeLists.txt:9:include(Tut)

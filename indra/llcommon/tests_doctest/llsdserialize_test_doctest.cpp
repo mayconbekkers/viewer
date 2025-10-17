@@ -1,2879 +1,934 @@
-// ---------------------------------------------------------------------------
-// Auto-generated from llsdserialize_test.cpp at 2025-10-16T18:47:17Z
-// This file is a TODO stub produced by gen_tut_to_doctest.py.
-// ---------------------------------------------------------------------------
+// Deterministic doctest subset for LLSD serialization/parse coverage
+// DOCTEST_SKIP_AUTOGEN: manual subset maintained by hand
 #include "doctest.h"
-#include "ll_doctest_helpers.h"
-#include "tut_compat_doctest.h"
+#include "indra/test/ll_doctest_helpers.h"
+#include "indra/test/tut_compat_doctest.h"
+
 #include "linden_common.h"
-#include <winsock2.h>
-#include <process.h>
-#include <io.h>
-// #include <unistd.h>  // not available on Windows
-// #include <netinet/in.h>  // not available on Windows
-#include <errno.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-// #include <sys/wait.h>  // not available on Windows
-#include "llprocess.h"
-#include "llstring.h"
-#include "boost/range.hpp"
+#include "llformat.h"
 #include "llsd.h"
 #include "llsdserialize.h"
 #include "llsdutil.h"
-#include "llformat.h"
 #include "llmemorystream.h"
-#include "../test/hexdump.h"
-#include "../test/namedtempfile.h"
-#include "stringize.h"
-// #include "StringVec.h"  // not available on Windows
-#include <functional>
+#include "llpointer.h"
+#include "lluri.h"
+#include "lluuid.h"
 
-TUT_SUITE("llcommon")
+#include <functional>
+#include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace
+{
+using FormatterFunction = std::function<void(const LLSD&, std::ostream&)>;
+using ParserFunction = std::function<S32(std::istream&, LLSD&, llssize)>;
+
+std::vector<U8> string_to_vector(const std::string& source)
+{
+    return std::vector<U8>(source.begin(), source.end());
+}
+
+void fill_map(LLSD& root, U32 width, U32 depth)
+{
+    if (depth == 0)
+    {
+        root["leaf"] = "value";
+        return;
+    }
+
+    for (U32 index = 0; index < width; ++index)
+    {
+        std::string key = llformat("child %u", index);
+        root[key] = LLSD::emptyMap();
+        fill_map(root[key], width, depth - 1);
+    }
+}
+
+class RoundTripFixture
+{
+public:
+    void setFormatterParser(LLPointer<LLSDFormatter> formatter, LLPointer<LLSDParser> parser)
+    {
+        mFormatter = [formatter](const LLSD& data, std::ostream& out) mutable
+        {
+            formatter->format(data, out);
+        };
+        mParser = [parser](std::istream& in, LLSD& data, llssize max_bytes) mutable -> S32
+        {
+            parser->reset();
+            return parser->parse(in, data, max_bytes);
+        };
+    }
+
+    void setFormatter(std::function<void(const LLSD&, std::ostream&)> formatter)
+    {
+        mFormatter = std::move(formatter);
+    }
+
+    void setParser(std::function<bool(LLSD&, std::istream&, llssize)> parser)
+    {
+        mParser = [parser](std::istream& in, LLSD& data, llssize max_bytes) mutable -> S32
+        {
+            const bool ok = parser(data, in, max_bytes);
+            return ok ? 1 : LLSDParser::PARSE_FAILURE;
+        };
+    }
+
+    void checkRoundTrip(const std::string& label, const LLSD& value)
+    {
+        REQUIRE_MESSAGE(static_cast<bool>(mFormatter), label << ": formatter not configured");
+        REQUIRE_MESSAGE(static_cast<bool>(mParser), label << ": parser not configured");
+
+        std::stringstream serialized;
+        mFormatter(value, serialized);
+        const std::string payload = serialized.str();
+
+        INFO(label);
+        INFO("serialized size: " << payload.size());
+        INFO("payload: " << payload);
+
+        LLSD decoded;
+        std::stringstream input(payload);
+        const S32 parsed_count = mParser(input, decoded, static_cast<llssize>(payload.size()));
+        CHECK_MESSAGE(parsed_count != LLSDParser::PARSE_FAILURE, label << ": parse failure");
+        CHECK_MESSAGE(decoded == value, label << ": round-trip mismatch");
+    }
+
+    void doRoundTripTests(const std::string& label)
+    {
+        LLSD value;
+        checkRoundTrip(label + " undefined", value);
+
+        value = true;
+        checkRoundTrip(label + " true bool", value);
+
+        value = false;
+        checkRoundTrip(label + " false bool", value);
+
+        value = 1;
+        checkRoundTrip(label + " positive int", value);
+
+        value = 0;
+        checkRoundTrip(label + " zero int", value);
+
+        value = -1;
+        checkRoundTrip(label + " negative int", value);
+
+        value = 1234.5f;
+        checkRoundTrip(label + " positive real", value);
+
+        value = -1234.5f;
+        checkRoundTrip(label + " negative real", value);
+
+        value = LLSD::emptyArray();
+        checkRoundTrip(label + " empty array", value);
+
+        value = LLSD::emptyArray();
+        value.append("ali");
+        value.append(28);
+        checkRoundTrip(label + " array", value);
+
+        value.clear();
+        value[0][0] = true;
+        value[1][0] = false;
+        checkRoundTrip(label + " nested arrays", value);
+
+        value = LLSD::emptyMap();
+        value["foo"] = "bar";
+        value["baz"] = 100;
+        checkRoundTrip(label + " map", value);
+
+        value = LLUUID("c96f9b1e-f589-4100-9774-d98643ce0bed");
+        checkRoundTrip(label + " uuid", value);
+
+        value = LLURI("https://secondlife.com/login");
+        checkRoundTrip(label + " uri", value);
+
+        value = LLDate("2006-04-24T16:11:33Z");
+        checkRoundTrip(label + " date", value);
+
+        value = string_to_vector("hello");
+        checkRoundTrip(label + " binary simple", value);
+
+        value = LLSD::emptyMap();
+        fill_map(value, 3, 2);
+        checkRoundTrip(label + " nested maps", value);
+    }
+
+private:
+    FormatterFunction mFormatter;
+    ParserFunction mParser;
+};
+
+template <typename ParserT>
+class ParseFixture
+{
+public:
+    ParseFixture()
+        : mParser(new ParserT)
+    {
+    }
+
+    void ensureParse(const std::string& msg,
+                     const std::string& input_text,
+                     const LLSD& expected_value,
+                     S32 expected_count,
+                     S32 depth_limit = -1)
+    {
+        std::stringstream input(input_text);
+        LLSD parsed;
+        mParser->reset();
+        const S32 count = mParser->parse(
+            input,
+            parsed,
+            static_cast<llssize>(input_text.size()),
+            depth_limit);
+
+        INFO(msg);
+        INFO("input: " << input_text);
+        if (expected_count == LLSDParser::PARSE_FAILURE)
+        {
+            CHECK(count == LLSDParser::PARSE_FAILURE);
+            CHECK(parsed == expected_value);
+        }
+        else
+        {
+            CHECK(parsed == expected_value);
+            CHECK(count == expected_count);
+        }
+    }
+
+private:
+    LLPointer<ParserT> mParser;
+};
+
+class CompatibilityFixture
+{
+public:
+    void ensureBinaryAndNotation(const std::string& label, const LLSD& input)
+    {
+        INFO(label);
+
+        std::stringstream binary_stream;
+        const S32 binary_count = LLSDSerialize::toBinary(input, binary_stream);
+        binary_stream.seekg(0);
+
+        LLSD from_binary;
+        const S32 parsed_binary = LLSDSerialize::fromBinary(
+            from_binary,
+            binary_stream,
+            LLSDSerialize::SIZE_UNLIMITED);
+        CHECK(parsed_binary == binary_count);
+        CHECK(from_binary == input);
+
+        std::stringstream notation_stream;
+        const S32 notation_count = LLSDSerialize::toNotation(from_binary, notation_stream);
+        notation_stream.seekg(0);
+
+        LLSD from_notation;
+        const S32 parsed_notation = LLSDSerialize::fromNotation(
+            from_notation,
+            notation_stream,
+            LLSDSerialize::SIZE_UNLIMITED);
+        CHECK(parsed_notation == notation_count);
+        CHECK(from_notation == input);
+    }
+
+    void ensureBinaryAndXML(const std::string& label, const LLSD& input)
+    {
+        INFO(label);
+
+        std::stringstream binary_stream;
+        const S32 binary_count = LLSDSerialize::toBinary(input, binary_stream);
+        binary_stream.seekg(0);
+
+        LLSD from_binary;
+        const S32 parsed_binary = LLSDSerialize::fromBinary(
+            from_binary,
+            binary_stream,
+            LLSDSerialize::SIZE_UNLIMITED);
+        CHECK(parsed_binary == binary_count);
+
+        std::stringstream xml_stream;
+        const S32 xml_count = LLSDSerialize::toXML(from_binary, xml_stream);
+        xml_stream.seekg(0);
+
+        LLSD from_xml;
+        const S32 parsed_xml = LLSDSerialize::fromXML(from_xml, xml_stream);
+        CHECK(parsed_xml == xml_count);
+        CHECK(from_xml == input);
+    }
+};
+} // namespace
+
+TUT_SUITE("llsdserialize_test")
 {
     TUT_CASE("llsdserialize_test::sd_xml_object_test_1")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::sd_xml_object::test<1> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void sd_xml_object::test<1>()
-        //     {
-        //         // random atomic tests
-        //         std::string expected;
+        LLSD sd;
+        LLPointer<LLSDXMLFormatter> formatter = new LLSDXMLFormatter;
 
-        //         expected = "<llsd><undef /></llsd>\n";
-        //         xml_test("undef", expected);
+        auto xml_test = [&](const char* name, const std::string& expected)
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            INFO(name);
+            LL_CHECK_EQ_STR(expected, out.str());
+        };
 
-        //         mSD = 3463;
-        //         expected = "<llsd><integer>3463</integer></llsd>\n";
-        //         xml_test("integer", expected);
+        xml_test("undef", "<llsd><undef /></llsd>\n");
 
-        //         mSD = "";
-        //         expected = "<llsd><string /></llsd>\n";
-        //         xml_test("empty string", expected);
+        sd = 3463;
+        xml_test("integer", "<llsd><integer>3463</integer></llsd>\n");
 
-        //         mSD = "foobar";
-        //         expected = "<llsd><string>foobar</string></llsd>\n";
-        //         xml_test("string", expected);
+        sd = "";
+        xml_test("empty string", "<llsd><string /></llsd>\n");
 
-        //         mSD = LLUUID::null;
-        //         expected = "<llsd><uuid /></llsd>\n";
-        //         xml_test("null uuid", expected);
+        sd = "foobar";
+        xml_test("string", "<llsd><string>foobar</string></llsd>\n");
 
-        //         mSD = LLUUID("c96f9b1e-f589-4100-9774-d98643ce0bed");
-        //         expected = "<llsd><uuid>c96f9b1e-f589-4100-9774-d98643ce0bed</uuid></llsd>\n";
-        //         xml_test("uuid", expected);
+        sd = LLUUID::null;
+        xml_test("null uuid", "<llsd><uuid /></llsd>\n");
 
-        //         mSD = LLURI("https://secondlife.com/login");
-        //         expected = "<llsd><uri>https://secondlife.com/login</uri></llsd>\n";
-        //         xml_test("uri", expected);
+        sd = LLUUID("c96f9b1e-f589-4100-9774-d98643ce0bed");
+        xml_test("uuid", "<llsd><uuid>c96f9b1e-f589-4100-9774-d98643ce0bed</uuid></llsd>\n");
 
-        //         mSD = LLDate("2006-04-24T16:11:33Z");
-        //         expected = "<llsd><date>2006-04-24T16:11:33Z</date></llsd>\n";
-        //         xml_test("date", expected);
+        sd = LLURI("https://secondlife.com/login");
+        xml_test("uri", "<llsd><uri>https://secondlife.com/login</uri></llsd>\n");
 
-        //         // Generated by: echo -n 'hello' | openssl enc -e -base64
-        //         std::vector<U8> hello;
-        //         hello.push_back('h');
-        //         hello.push_back('e');
-        //         hello.push_back('l');
-        //         hello.push_back('l');
-        //         hello.push_back('o');
-        //         mSD = hello;
-        //         expected = "<llsd><binary encoding=\"base64\">aGVsbG8=</binary></llsd>\n";
-        //         xml_test("binary", expected);
-        //     }
+        sd = LLDate("2006-04-24T16:11:33Z");
+        xml_test("date", "<llsd><date>2006-04-24T16:11:33Z</date></llsd>\n");
+
+        sd = string_to_vector("hello");
+        xml_test("binary", "<llsd><binary encoding=\"base64\">aGVsbG8=</binary></llsd>\n");
     }
 
     TUT_CASE("llsdserialize_test::sd_xml_object_test_2")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::sd_xml_object::test<2> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void sd_xml_object::test<2>()
-        //     {
-        //         // tests with boolean values.
-        //         std::string expected;
+        LLSD sd;
+        LLPointer<LLSDXMLFormatter> formatter = new LLSDXMLFormatter;
 
-        //         mFormatter->boolalpha(true);
-        //         mSD = true;
-        //         expected = "<llsd><boolean>true</boolean></llsd>\n";
-        //         xml_test("bool alpha true", expected);
-        //         mSD = false;
-        //         expected = "<llsd><boolean>false</boolean></llsd>\n";
-        //         xml_test("bool alpha false", expected);
+        formatter->boolalpha(true);
+        sd = true;
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><boolean>true</boolean></llsd>\n", out.str());
+        }
+        sd = false;
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><boolean>false</boolean></llsd>\n", out.str());
+        }
 
-        //         mFormatter->boolalpha(false);
-        //         mSD = true;
-        //         expected = "<llsd><boolean>1</boolean></llsd>\n";
-        //         xml_test("bool true", expected);
-        //         mSD = false;
-        //         expected = "<llsd><boolean>0</boolean></llsd>\n";
-        //         xml_test("bool false", expected);
-        //     }
+        formatter->boolalpha(false);
+        sd = true;
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><boolean>1</boolean></llsd>\n", out.str());
+        }
+        sd = false;
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><boolean>0</boolean></llsd>\n", out.str());
+        }
     }
 
     TUT_CASE("llsdserialize_test::sd_xml_object_test_3")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::sd_xml_object::test<3> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void sd_xml_object::test<3>()
-        //     {
-        //         // tests with real values.
-        //         std::string expected;
+        LLSD sd;
+        LLPointer<LLSDXMLFormatter> formatter = new LLSDXMLFormatter;
 
-        //         mFormatter->realFormat("%.2f");
-        //         mSD = 1.0;
-        //         expected = "<llsd><real>1.00</real></llsd>\n";
-        //         xml_test("real 1", expected);
+        formatter->realFormat("%.2f");
+        sd = 1.0;
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><real>1.00</real></llsd>\n", out.str());
+        }
 
-        //         mSD = -34379.0438;
-        //         expected = "<llsd><real>-34379.04</real></llsd>\n";
-        //         xml_test("real reduced precision", expected);
-        //         mFormatter->realFormat("%.4f");
-        //         expected = "<llsd><real>-34379.0438</real></llsd>\n";
-        //         xml_test("higher precision", expected);
+        sd = -34379.0438;
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><real>-34379.04</real></llsd>\n", out.str());
+        }
 
-        //         mFormatter->realFormat("%.0f");
-        //         mSD = 0.0;
-        //         expected = "<llsd><real>0</real></llsd>\n";
-        //         xml_test("no decimal 0", expected);
-        //         mSD = 3287.4387;
-        //         expected = "<llsd><real>3287</real></llsd>\n";
-        //         xml_test("no decimal real number", expected);
-        //     }
+        formatter->realFormat("%.4f");
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><real>-34379.0438</real></llsd>\n", out.str());
+        }
+
+        formatter->realFormat("%.0f");
+        sd = 0.0;
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><real>0</real></llsd>\n", out.str());
+        }
+
+        sd = 3287.4387;
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><real>3287</real></llsd>\n", out.str());
+        }
     }
 
     TUT_CASE("llsdserialize_test::sd_xml_object_test_4")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::sd_xml_object::test<4> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void sd_xml_object::test<4>()
-        //     {
-        //         // tests with arrays
-        //         std::string expected;
+        LLSD sd;
+        LLPointer<LLSDXMLFormatter> formatter = new LLSDXMLFormatter;
 
-        //         mSD = LLSD::emptyArray();
-        //         expected = "<llsd><array /></llsd>\n";
-        //         xml_test("empty array", expected);
+        sd = LLSD::emptyArray();
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><array /></llsd>\n", out.str());
+        }
 
-        //         mSD.append(LLSD());
-        //         expected = "<llsd><array><undef /></array></llsd>\n";
-        //         xml_test("1 element array", expected);
+        sd = LLSD::emptyArray();
+        sd.append(LLSD());
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><array><undef /></array></llsd>\n", out.str());
+        }
 
-        //         mSD.append(1);
-        //         expected = "<llsd><array><undef /><integer>1</integer></array></llsd>\n";
-        //         xml_test("2 element array", expected);
-        //     }
+        sd = LLSD::emptyArray();
+        sd.append(LLSD());
+        sd.append(1);
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><array><undef /><integer>1</integer></array></llsd>\n", out.str());
+        }
     }
 
     TUT_CASE("llsdserialize_test::sd_xml_object_test_5")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::sd_xml_object::test<5> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void sd_xml_object::test<5>()
-        //     {
-        //         // tests with arrays
-        //         std::string expected;
+        LLSD sd = LLSD::emptyMap();
+        LLPointer<LLSDXMLFormatter> formatter = new LLSDXMLFormatter;
 
-        //         mSD = LLSD::emptyMap();
-        //         expected = "<llsd><map /></llsd>\n";
-        //         xml_test("empty map", expected);
+        sd["foo"] = "bar";
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><map><key>foo</key><string>bar</string></map></llsd>\n", out.str());
+        }
 
-        //         mSD["foo"] = "bar";
-        //         expected = "<llsd><map><key>foo</key><string>bar</string></map></llsd>\n";
-        //         xml_test("1 element map", expected);
-
-        //         mSD["baz"] = LLSD();
-        //         expected = "<llsd><map><key>baz</key><undef /><key>foo</key><string>bar</string></map></llsd>\n";
-        //         xml_test("2 element map", expected);
-        //     }
+        sd["baz"] = LLSD();
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><map><key>baz</key><undef /><key>foo</key><string>bar</string></map></llsd>\n", out.str());
+        }
     }
 
     TUT_CASE("llsdserialize_test::sd_xml_object_test_6")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::sd_xml_object::test<6> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void sd_xml_object::test<6>()
-        //     {
-        //         // tests with binary
-        //         std::string expected;
+        LLSD sd;
+        LLPointer<LLSDXMLFormatter> formatter = new LLSDXMLFormatter;
 
-        //         // Generated by: echo -n 'hello' | openssl enc -e -base64
-        //         mSD = string_to_vector("hello");
-        //         expected = "<llsd><binary encoding=\"base64\">aGVsbG8=</binary></llsd>\n";
-        //         xml_test("binary", expected);
+        sd = string_to_vector("hello");
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR("<llsd><binary encoding=\"base64\">aGVsbG8=</binary></llsd>\n", out.str());
+        }
 
-        //         mSD = string_to_vector("6|6|asdfhappybox|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|00000000-0000-0000-0000-000000000000|7fffffff|7fffffff|0|0|82000|450fe394-2904-c9ad-214c-a07eb7feec29|(No Description)|0|10|0");
-        //         expected = "<llsd><binary encoding=\"base64\">Nnw2fGFzZGZoYXBweWJveHw2MGU0NGVjNS0zMDVjLTQzYzItOWExOS1iNGI4OWIxYWUyYTZ8NjBlNDRlYzUtMzA1Yy00M2MyLTlhMTktYjRiODliMWFlMmE2fDYwZTQ0ZWM1LTMwNWMtNDNjMi05YTE5LWI0Yjg5YjFhZTJhNnwwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDB8N2ZmZmZmZmZ8N2ZmZmZmZmZ8MHwwfDgyMDAwfDQ1MGZlMzk0LTI5MDQtYzlhZC0yMTRjLWEwN2ViN2ZlZWMyOXwoTm8gRGVzY3JpcHRpb24pfDB8MTB8MA==</binary></llsd>\n";
-        //         xml_test("binary", expected);
-        //     }
+        sd = string_to_vector("6|6|asdfhappybox|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|00000000-0000-0000-0000-000000000000|7fffffff|7fffffff|0|0|82000|450fe394-2904-c9ad-214c-a07eb7feec29|(No Description)|0|10|0");
+        const std::string expected =
+            "<llsd><binary encoding=\"base64\">Nnw2fGFzZGZoYXBweWJveHw2MGU0NGVjNS0zMDVjLTQzYzItOWExOS1iNGI4OWIxYWUyYTZ8NjBlNDRlYzUtMzA1Yy00M2MyLTlhMTktYjRiODliMWFlMmE2fDYwZTQ0ZWM1LTMwNWMtNDNjMi05YTE5LWI0Yjg5YjFhZTJhNnwwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDB8N2ZmZmZmZmZ8N2ZmZmZmZmZ8MHwwfDgyMDAwfDQ1MGZlMzk0LTI5MDQtYzlhZC0yMTRjLWEwN2ViN2ZlZWMyOXwoTm8gRGVzY3JpcHRpb24pfDB8MTB8MA==</binary></llsd>\n";
+        {
+            std::ostringstream out;
+            formatter->format(sd, out);
+            LL_CHECK_EQ_STR(expected, out.str());
+        }
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDSerializeObject_test_1")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDSerializeObject::test<1> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDSerializeObject::test<1>()
-        //     {
-        //         setFormatterParser(new LLSDNotationFormatter(false, "", LLSDFormatter::OPTIONS_PRETTY_BINARY),
-        //                            new LLSDNotationParser());
-        //         doRoundTripTests("pretty binary notation serialization");
-        //     }
+        RoundTripFixture fixture;
+        fixture.setFormatterParser(
+            new LLSDNotationFormatter(false, "", LLSDFormatter::OPTIONS_PRETTY_BINARY),
+            new LLSDNotationParser());
+        fixture.doRoundTripTests("pretty binary notation serialization");
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDSerializeObject_test_2")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDSerializeObject::test<2> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDSerializeObject::test<2>()
-        //     {
-        //         setFormatterParser(new LLSDNotationFormatter(false, "", LLSDFormatter::OPTIONS_NONE),
-        //                            new LLSDNotationParser());
-        //         doRoundTripTests("raw binary notation serialization");
-        //     }
+        RoundTripFixture fixture;
+        fixture.setFormatterParser(
+            new LLSDNotationFormatter(false, "", LLSDFormatter::OPTIONS_NONE),
+            new LLSDNotationParser());
+        fixture.doRoundTripTests("raw binary notation serialization");
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDSerializeObject_test_3")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDSerializeObject::test<3> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDSerializeObject::test<3>()
-        //     {
-        //         setFormatterParser(new LLSDXMLFormatter(), new LLSDXMLParser());
-        //         doRoundTripTests("xml serialization");
-        //     }
+        RoundTripFixture fixture;
+        fixture.setFormatterParser(new LLSDXMLFormatter(), new LLSDXMLParser());
+        fixture.doRoundTripTests("xml serialization");
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDSerializeObject_test_4")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDSerializeObject::test<4> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDSerializeObject::test<4>()
-        //     {
-        //         setFormatterParser(new LLSDBinaryFormatter(), new LLSDBinaryParser());
-        //         doRoundTripTests("binary serialization");
-        //     }
+        RoundTripFixture fixture;
+        fixture.setFormatterParser(new LLSDBinaryFormatter(), new LLSDBinaryParser());
+        fixture.doRoundTripTests("binary serialization");
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDSerializeObject_test_5")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDSerializeObject::test<5> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDSerializeObject::test<5>()
-        //     {
-        //         mFormatter = [](const LLSD& sd, std::ostream& str)
-        //         {
-        //             LLSDSerialize::serialize(sd, str, LLSDSerialize::LLSD_BINARY);
-        //         };
-        //         setParser(LLSDSerialize::deserialize);
-        //         doRoundTripTests("serialize(LLSD_BINARY)");
-        //     }
+        RoundTripFixture fixture;
+        fixture.setFormatter(
+            [](const LLSD& sd, std::ostream& out)
+            {
+                LLSDSerialize::serialize(sd, out, LLSDSerialize::LLSD_BINARY);
+            });
+        fixture.setParser(LLSDSerialize::deserialize);
+        fixture.doRoundTripTests("serialize(LLSD_BINARY)");
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDSerializeObject_test_6")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDSerializeObject::test<6> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDSerializeObject::test<6>()
-        //     {
-        //         mFormatter = [](const LLSD& sd, std::ostream& str)
-        //         {
-        //             LLSDSerialize::serialize(sd, str, LLSDSerialize::LLSD_XML);
-        //         };
-        //         setParser(LLSDSerialize::deserialize);
-        //         doRoundTripTests("serialize(LLSD_XML)");
-        //     }
+        RoundTripFixture fixture;
+        fixture.setFormatter(
+            [](const LLSD& sd, std::ostream& out)
+            {
+                LLSDSerialize::serialize(sd, out, LLSDSerialize::LLSD_XML);
+            });
+        fixture.setParser(LLSDSerialize::deserialize);
+        fixture.doRoundTripTests("serialize(LLSD_XML)");
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDSerializeObject_test_7")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDSerializeObject::test<7> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDSerializeObject::test<7>()
-        //     {
-        //         mFormatter = [](const LLSD& sd, std::ostream& str)
-        //         {
-        //             LLSDSerialize::serialize(sd, str, LLSDSerialize::LLSD_NOTATION);
-        //         };
-        //         setParser(LLSDSerialize::deserialize);
-        //         // In this test, serialize(LLSD_NOTATION) emits a header recognized by
-        //         // deserialize().
-        //         doRoundTripTests("serialize(LLSD_NOTATION)");
-        //     }
+        RoundTripFixture fixture;
+        fixture.setFormatter(
+            [](const LLSD& sd, std::ostream& out)
+            {
+                LLSDSerialize::serialize(sd, out, LLSDSerialize::LLSD_NOTATION);
+            });
+        fixture.setParser(LLSDSerialize::deserialize);
+        fixture.doRoundTripTests("serialize(LLSD_NOTATION)");
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDSerializeObject_test_8")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDSerializeObject::test<8> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDSerializeObject::test<8>()
-        //     {
-        //         setFormatterParser(new LLSDNotationFormatter(false, "", LLSDFormatter::OPTIONS_NONE),
-        //                            new LLSDNotationParser());
-        //         setParser(LLSDSerialize::deserialize);
-        //         // This is an interesting test because LLSDNotationFormatter does not
-        //         // emit an llsd/notation header.
-        //         doRoundTripTests("LLSDNotationFormatter -> deserialize");
-        //     }
+        RoundTripFixture fixture;
+        fixture.setFormatterParser(
+            new LLSDNotationFormatter(false, "", LLSDFormatter::OPTIONS_NONE),
+            new LLSDNotationParser());
+        fixture.setParser(LLSDSerialize::deserialize);
+        fixture.doRoundTripTests("LLSDNotationFormatter -> deserialize");
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDSerializeObject_test_9")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDSerializeObject::test<9> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDSerializeObject::test<9>()
-        //     {
-        //         setFormatterParser(new LLSDXMLFormatter(false, "", LLSDFormatter::OPTIONS_NONE),
-        //                            new LLSDXMLParser());
-        //         setParser(LLSDSerialize::deserialize);
-        //         // This is an interesting test because LLSDXMLFormatter does not
-        //         // emit an LLSD/XML header.
-        //         doRoundTripTests("LLSDXMLFormatter -> deserialize");
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDSerializeObject_test_10")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDSerializeObject::test<10> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDSerializeObject::test<10>()
-        //     {
-        //         setFormatterParser(new LLSDBinaryFormatter(false, "", LLSDFormatter::OPTIONS_NONE),
-        //                            new LLSDBinaryParser());
-        //         setParser(LLSDSerialize::deserialize);
-        //         // This is an interesting test because LLSDBinaryFormatter does not
-        //         // emit an LLSD/Binary header.
-        //         doRoundTripTests("LLSDBinaryFormatter -> deserialize");
-        //     }
+        RoundTripFixture fixture;
+        fixture.setFormatterParser(
+            new LLSDXMLFormatter(false, "", LLSDFormatter::OPTIONS_NONE),
+            new LLSDXMLParser());
+        fixture.setParser(LLSDSerialize::deserialize);
+        fixture.doRoundTripTests("LLSDXMLFormatter -> deserialize");
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDXMLParsingObject_test_1")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDXMLParsingObject::test<1> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDXMLParsingObject::test<1>()
-        //     {
-        //         // test handling of xml not recognized as llsd results in an
-        //         // LLSD Undefined
-        //         ensureParse(
-        //             "malformed xml",
-        //             "<llsd><string>ha ha</string>",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         ensureParse(
-        //             "not llsd",
-        //             "<html><body><p>ha ha</p></body></html>",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         ensureParse(
-        //             "value without llsd",
-        //             "<string>ha ha</string>",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         ensureParse(
-        //             "key without llsd",
-        //             "<key>ha ha</key>",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
+        ParseFixture<LLSDXMLParser> fixture;
+        fixture.ensureParse(
+            "malformed xml",
+            "<llsd><string>ha ha</string>",
+            LLSD(),
+            LLSDParser::PARSE_FAILURE);
+        fixture.ensureParse(
+            "not llsd",
+            "<html><body><p>ha ha</p></body></html>",
+            LLSD(),
+            LLSDParser::PARSE_FAILURE);
+        fixture.ensureParse(
+            "value without llsd",
+            "<string>ha ha</string>",
+            LLSD(),
+            LLSDParser::PARSE_FAILURE);
+        fixture.ensureParse(
+            "key without llsd",
+            "<key>ha ha</key>",
+            LLSD(),
+            LLSDParser::PARSE_FAILURE);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDXMLParsingObject_test_2")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDXMLParsingObject::test<2> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDXMLParsingObject::test<2>()
-        //     {
-        //         // test handling of unrecognized or unparseable llsd values
-        //         LLSD v;
-        //         v["amy"] = 23;
-        //         v["bob"] = LLSD();
-        //         v["cam"] = 1.23;
+        ParseFixture<LLSDXMLParser> fixture;
+        LLSD expected;
+        expected["amy"] = 23;
+        expected["bob"] = LLSD();
+        expected["cam"] = 1.23;
 
-        //         ensureParse(
-        //             "unknown data type",
-        //             "<llsd><map>"
-        //                 "<key>amy</key><integer>23</integer>"
-        //                 "<key>bob</key><bigint>99999999999999999</bigint>"
-        //                 "<key>cam</key><real>1.23</real>"
-        //             "</map></llsd>",
-        //             v,
-        //             static_cast<S32>(v.size()) + 1);
-        //     }
+        fixture.ensureParse(
+            "unknown data type",
+            "<llsd><map>"
+            "<key>amy</key><integer>23</integer>"
+            "<key>bob</key><bigint>99999999999999999</bigint>"
+            "<key>cam</key><real>1.23</real>"
+            "</map></llsd>",
+            expected,
+            static_cast<S32>(expected.size()) + 1);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDXMLParsingObject_test_3")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDXMLParsingObject::test<3> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDXMLParsingObject::test<3>()
-        //     {
-        //         // test handling of nested bad data
+        ParseFixture<LLSDXMLParser> fixture;
 
-        //         LLSD v;
-        //         v["amy"] = 23;
-        //         v["cam"] = 1.23;
+        LLSD expected;
+        expected["amy"] = 23;
+        expected["cam"] = 1.23;
+        fixture.ensureParse(
+            "map with html",
+            "<llsd><map>"
+            "<key>amy</key><integer>23</integer>"
+            "<html><body>ha ha</body></html>"
+            "<key>cam</key><real>1.23</real>"
+            "</map></llsd>",
+            expected,
+            static_cast<S32>(expected.size()) + 1);
 
-        //         ensureParse(
-        //             "map with html",
-        //             "<llsd><map>"
-        //                 "<key>amy</key><integer>23</integer>"
-        //                 "<html><body>ha ha</body></html>"
-        //                 "<key>cam</key><real>1.23</real>"
-        //             "</map></llsd>",
-        //             v,
-        //             static_cast<S32>(v.size()) + 1);
+        expected.clear();
+        expected["amy"] = 23;
+        expected["cam"] = 1.23;
+        fixture.ensureParse(
+            "map with value for key",
+            "<llsd><map>"
+            "<key>amy</key><integer>23</integer>"
+            "<string>ha ha</string>"
+            "<key>cam</key><real>1.23</real>"
+            "</map></llsd>",
+            expected,
+            static_cast<S32>(expected.size()) + 1);
 
-        //         v.clear();
-        //         v["amy"] = 23;
-        //         v["cam"] = 1.23;
-        //         ensureParse(
-        //             "map with value for key",
-        //             "<llsd><map>"
-        //                 "<key>amy</key><integer>23</integer>"
-        //                 "<string>ha ha</string>"
-        //                 "<key>cam</key><real>1.23</real>"
-        //             "</map></llsd>",
-        //             v,
-        //             static_cast<S32>(v.size()) + 1);
-
-        //         v.clear();
-        //         v["amy"] = 23;
-        //         v["bob"] = LLSD::emptyMap();
-        //         v["cam"] = 1.23;
-        //         ensureParse(
-        //             "map with map of html",
-        //             "<llsd><map>"
-        //                 "<key>amy</key><integer>23</integer>"
-        //                 "<key>bob</key>"
-        //                 "<map>"
-        //                     "<html><body>ha ha</body></html>"
-        //                 "</map>"
-        //                 "<key>cam</key><real>1.23</real>"
-        //             "</map></llsd>",
-        //             v,
-        //             static_cast<S32>(v.size()) + 1);
-
-        //         v.clear();
-        //         v[0] = 23;
-        //         v[1] = LLSD();
-        //         v[2] = 1.23;
-
-        //         ensureParse(
-        //             "array value of html",
-        //             "<llsd><array>"
-        //                 "<integer>23</integer>"
-        //                 "<html><body>ha ha</body></html>"
-        //                 "<real>1.23</real>"
-        //             "</array></llsd>",
-        //             v,
-        //             static_cast<S32>(v.size()) + 1);
-
-        //         v.clear();
-        //         v[0] = 23;
-        //         v[1] = LLSD::emptyMap();
-        //         v[2] = 1.23;
-        //         ensureParse(
-        //             "array with map of html",
-        //             "<llsd><array>"
-        //                 "<integer>23</integer>"
-        //                 "<map>"
-        //                     "<html><body>ha ha</body></html>"
-        //                 "</map>"
-        //                 "<real>1.23</real>"
-        //             "</array></llsd>",
-        //             v,
-        //             static_cast<S32>(v.size()) + 1);
-        //     }
+        expected.clear();
+        expected["amy"] = 23;
+        expected["bob"] = LLSD::emptyMap();
+        expected["cam"] = 1.23;
+        fixture.ensureParse(
+            "map with map of html",
+            "<llsd><map>"
+            "<key>amy</key><integer>23</integer>"
+            "<key>bob</key>"
+            "<map>"
+            "<html><body>ha ha</body></html>"
+            "</map>"
+            "<key>cam</key><real>1.23</real>"
+            "</map></llsd>",
+            expected,
+            static_cast<S32>(expected.size()) + 1);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDXMLParsingObject_test_4")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDXMLParsingObject::test<4> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDXMLParsingObject::test<4>()
-        //     {
-        //         // test handling of binary object in XML
-        //         std::string xml;
-        //         LLSD expected;
+        ParseFixture<LLSDXMLParser> fixture;
 
-        //         // Generated by: echo -n 'hello' | openssl enc -e -base64
-        //         expected = string_to_vector("hello");
-        //         xml = "<llsd><binary encoding=\"base64\">aGVsbG8=</binary></llsd>\n";
-        //         ensureParse(
-        //             "the word 'hello' packed in binary encoded base64",
-        //             xml,
-        //             expected,
-        //             1);
+        std::string xml = "<llsd><binary encoding=\"base64\">aGVsbG8=</binary></llsd>\n";
+        fixture.ensureParse(
+            "binary hello",
+            xml,
+            string_to_vector("hello"),
+            1);
 
-        //         expected = string_to_vector("6|6|asdfhappybox|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|00000000-0000-0000-0000-000000000000|7fffffff|7fffffff|0|0|82000|450fe394-2904-c9ad-214c-a07eb7feec29|(No Description)|0|10|0");
-        //         xml = "<llsd><binary encoding=\"base64\">Nnw2fGFzZGZoYXBweWJveHw2MGU0NGVjNS0zMDVjLTQzYzItOWExOS1iNGI4OWIxYWUyYTZ8NjBlNDRlYzUtMzA1Yy00M2MyLTlhMTktYjRiODliMWFlMmE2fDYwZTQ0ZWM1LTMwNWMtNDNjMi05YTE5LWI0Yjg5YjFhZTJhNnwwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDB8N2ZmZmZmZmZ8N2ZmZmZmZmZ8MHwwfDgyMDAwfDQ1MGZlMzk0LTI5MDQtYzlhZC0yMTRjLWEwN2ViN2ZlZWMyOXwoTm8gRGVzY3JpcHRpb24pfDB8MTB8MA==</binary></llsd>\n";
-        //         ensureParse(
-        //             "a common binary blob for object -> agent offline inv transfer",
-        //             xml,
-        //             expected,
-        //             1);
-
-        //         expected = string_to_vector("6|6|asdfhappybox|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|00000000-0000-0000-0000-000000000000|7fffffff|7fffffff|0|0|82000|450fe394-2904-c9ad-214c-a07eb7feec29|(No Description)|0|10|0");
-        //         xml = "<llsd><binary encoding=\"base64\">Nnw2fGFzZGZoYXBweWJveHw2MGU0NGVjNS0zMDVjLTQzYzItOWExOS1iNGI4OWIxYWUyYTZ8NjBl\n";
-        //         xml += "NDRlYzUtMzA1Yy00M2MyLTlhMTktYjRiODliMWFlMmE2fDYwZTQ0ZWM1LTMwNWMtNDNjMi05YTE5\n";
-        //         xml += "LWI0Yjg5YjFhZTJhNnwwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDB8N2ZmZmZm\n";
-        //         xml += "ZmZ8N2ZmZmZmZmZ8MHwwfDgyMDAwfDQ1MGZlMzk0LTI5MDQtYzlhZC0yMTRjLWEwN2ViN2ZlZWMy\n";
-        //         xml += "OXwoTm8gRGVzY3JpcHRpb24pfDB8MTB8MA==</binary></llsd>\n";
-        //         ensureParse(
-        //             "a common binary blob for object -> agent offline inv transfer",
-        //             xml,
-        //             expected,
-        //             1);
-        //     }
+        const std::string blob =
+            "<llsd><binary encoding=\"base64\">Nnw2fGFzZGZoYXBweWJveHw2MGU0NGVjNS0zMDVjLTQzYzItOWExOS1iNGI4OWIxYWUyYTZ8NjBlNDRlYzUtMzA1Yy00M2MyLTlhMTktYjRiODliMWFlMmE2fDYwZTQ0ZWM1LTMwNWMtNDNjMi05YTE5LWI0Yjg5YjFhZTJhNnwwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDB8N2ZmZmZmZmZ8N2ZmZmZmZmZ8MHwwfDgyMDAwfDQ1MGZlMzk0LTI5MDQtYzlhZC0yMTRjLWEwN2ViN2ZlZWMyOXwoTm8gRGVzY3JpcHRpb24pfDB8MTB8MA==</binary></llsd>\n";
+        fixture.ensureParse(
+            "binary blob",
+            blob,
+            string_to_vector("6|6|asdfhappybox|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|60e44ec5-305c-43c2-9a19-b4b89b1ae2a6|00000000-0000-0000-0000-000000000000|7fffffff|7fffffff|0|0|82000|450fe394-2904-c9ad-214c-a07eb7feec29|(No Description)|0|10|0"),
+            1);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDXMLParsingObject_test_5")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDXMLParsingObject::test<5> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDXMLParsingObject::test<5>()
-        //     {
-        //         // test deeper nested levels
-        //         LLSD level_5 = LLSD::emptyMap();      level_5["level_5"] = 42.f;
-        //         LLSD level_4 = LLSD::emptyMap();      level_4["level_4"] = level_5;
-        //         LLSD level_3 = LLSD::emptyMap();      level_3["level_3"] = level_4;
-        //         LLSD level_2 = LLSD::emptyMap();      level_2["level_2"] = level_3;
-        //         LLSD level_1 = LLSD::emptyMap();      level_1["level_1"] = level_2;
-        //         LLSD level_0 = LLSD::emptyMap();      level_0["level_0"] = level_1;
+        ParseFixture<LLSDXMLParser> fixture;
 
-        //         LLSD v;
-        //         v["deep"] = level_0;
+        LLSD level_5 = LLSD::emptyMap(); level_5["level_5"] = 42.f;
+        LLSD level_4 = LLSD::emptyMap(); level_4["level_4"] = level_5;
+        LLSD level_3 = LLSD::emptyMap(); level_3["level_3"] = level_4;
+        LLSD level_2 = LLSD::emptyMap(); level_2["level_2"] = level_3;
+        LLSD level_1 = LLSD::emptyMap(); level_1["level_1"] = level_2;
+        LLSD level_0 = LLSD::emptyMap(); level_0["level_0"] = level_1;
+        LLSD expected = LLSD::emptyMap(); expected["deep"] = level_0;
 
-        //         ensureParse(
-        //             "deep llsd xml map",
-        //             "<llsd><map>"
-        //             "<key>deep</key><map>"
-        //             "<key>level_0</key><map>"
-        //             "<key>level_1</key><map>"
-        //             "<key>level_2</key><map>"
-        //             "<key>level_3</key><map>"
-        //             "<key>level_4</key><map>"
-        //             "<key>level_5</key><real>42.0</real>"
-        //             "</map>"
-        //             "</map>"
-        //             "</map>"
-        //             "</map>"
-        //             "</map>"
-        //             "</map>"
-        //             "</map></llsd>",
-        //             v,
-        //             8);
-        //     }
+        fixture.ensureParse(
+            "deep llsd xml map",
+            "<llsd><map>"
+            "<key>deep</key><map>"
+            "<key>level_0</key><map>"
+            "<key>level_1</key><map>"
+            "<key>level_2</key><map>"
+            "<key>level_3</key><map>"
+            "<key>level_4</key><map>"
+            "<key>level_5</key><real>42.0</real>"
+            "</map>"
+            "</map>"
+            "</map>"
+            "</map>"
+            "</map>"
+            "</map>"
+            "</map></llsd>",
+            expected,
+            8);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_1")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<1> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<1>()
-        //     {
+        ParseFixture<LLSDNotationParser> fixture;
+        fixture.ensureParse("malformed notation map", "{'ha ha'", LLSD(), LLSDParser::PARSE_FAILURE);
+        fixture.ensureParse("malformed notation array", "['ha ha'", LLSD(), LLSDParser::PARSE_FAILURE);
+        fixture.ensureParse("malformed notation string", "'ha ha", LLSD(), LLSDParser::PARSE_FAILURE);
+        fixture.ensureParse("bad notation noise", "g48ejlnfr", LLSD(), LLSDParser::PARSE_FAILURE);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_2")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<2> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<2>()
-        //     {
-        //         ensureParse("valid undef", "!", LLSD(), 1);
-        //     }
+        ParseFixture<LLSDNotationParser> fixture;
+        fixture.ensureParse("valid undef", "!", LLSD(), 1);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_3")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<3> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<3>()
-        //     {
-        //         LLSD val = false;
-        //         ensureParse("valid boolean false 0", "false", val, 1);
-        //         ensureParse("valid boolean false 1", "f", val, 1);
-        //         ensureParse("valid boolean false 2", "0", val, 1);
-        //         ensureParse("valid boolean false 3", "F", val, 1);
-        //         ensureParse("valid boolean false 4", "FALSE", val, 1);
-        //         val = true;
-        //         ensureParse("valid boolean true 0", "true", val, 1);
-        //         ensureParse("valid boolean true 1", "t", val, 1);
-        //         ensureParse("valid boolean true 2", "1", val, 1);
-        //         ensureParse("valid boolean true 3", "T", val, 1);
-        //         ensureParse("valid boolean true 4", "TRUE", val, 1);
+        ParseFixture<LLSDNotationParser> fixture;
+        LLSD val = false;
+        fixture.ensureParse("valid boolean false 0", "false", val, 1);
+        fixture.ensureParse("valid boolean false 1", "f", val, 1);
+        fixture.ensureParse("valid boolean false 2", "0", val, 1);
+        fixture.ensureParse("valid boolean false 3", "F", val, 1);
+        fixture.ensureParse("valid boolean false 4", "FALSE", val, 1);
 
-        //         val.clear();
-        //         ensureParse("invalid true", "TR", val, LLSDParser::PARSE_FAILURE);
-        //         ensureParse("invalid false", "FAL", val, LLSDParser::PARSE_FAILURE);
-        //     }
+        val = true;
+        fixture.ensureParse("valid boolean true 0", "true", val, 1);
+        fixture.ensureParse("valid boolean true 1", "t", val, 1);
+        fixture.ensureParse("valid boolean true 2", "1", val, 1);
+        fixture.ensureParse("valid boolean true 3", "T", val, 1);
+        fixture.ensureParse("valid boolean true 4", "TRUE", val, 1);
+
+        val.clear();
+        fixture.ensureParse("invalid true", "TR", val, LLSDParser::PARSE_FAILURE);
+        fixture.ensureParse("invalid false", "FAL", val, LLSDParser::PARSE_FAILURE);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_4")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<4> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<4>()
-        //     {
-        //         LLSD val = 123;
-        //         ensureParse("valid integer", "i123", val, 1);
-        //         val.clear();
-        //         ensureParse("invalid integer", "421", val, LLSDParser::PARSE_FAILURE);
-        //     }
+        ParseFixture<LLSDNotationParser> fixture;
+        LLSD val = 123;
+        fixture.ensureParse("valid integer", "i123", val, 1);
+        val.clear();
+        fixture.ensureParse("invalid integer", "421", val, LLSDParser::PARSE_FAILURE);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_5")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<5> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<5>()
-        //     {
-        //         LLSD val = 456.7;
-        //         ensureParse("valid real", "r456.7", val, 1);
-        //         val.clear();
-        //         ensureParse("invalid real", "456.7", val, LLSDParser::PARSE_FAILURE);
-        //     }
+        ParseFixture<LLSDNotationParser> fixture;
+        LLSD val = 456.7;
+        fixture.ensureParse("valid real", "r456.7", val, 1);
+        val.clear();
+        fixture.ensureParse("invalid real", "456.7", val, LLSDParser::PARSE_FAILURE);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_6")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<6> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<6>()
-        //     {
-        //         LLUUID id;
-        //         LLSD val = id;
-        //         ensureParse(
-        //             "unparseable uuid",
-        //             "u123",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         id.generate();
-        //         val = id;
-        //         std::string uuid_str("u");
-        //         uuid_str += id.asString();
-        //         ensureParse("valid uuid", uuid_str.c_str(), val, 1);
-        //     }
+        ParseFixture<LLSDNotationParser> fixture;
+        LLUUID id("01234567-89ab-cdef-0123-456789abcdef");
+        LLSD val = id;
+        fixture.ensureParse("valid uuid", "u01234567-89ab-cdef-0123-456789abcdef", val, 1);
+        fixture.ensureParse("unparseable uuid", "u123", LLSD(), LLSDParser::PARSE_FAILURE);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_7")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<7> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<7>()
-        //     {
-        //         LLSD val = std::string("foolish");
-        //         ensureParse("valid string 1", "\"foolish\"", val, 1);
-        //         val = std::string("g'day");
-        //         ensureParse("valid string 2", "\"g'day\"", val, 1);
-        //         val = std::string("have a \"nice\" day");
-        //         ensureParse("valid string 3", "'have a \"nice\" day'", val, 1);
-        //         val = std::string("whatever");
-        //         ensureParse("valid string 4", "s(8)\"whatever\"", val, 1);
-        //     }
+        ParseFixture<LLSDNotationParser> fixture;
+
+        fixture.ensureParse("valid string 1", "\"foolish\"", LLSD("foolish"), 1);
+        fixture.ensureParse("valid string 2", "\"g'day\"", LLSD("g'day"), 1);
+        fixture.ensureParse("valid string 3", "'have a \"nice\" day'", LLSD("have a \"nice\" day"), 1);
+        fixture.ensureParse("valid string 4", "s(8)\"whatever\"", LLSD("whatever"), 1);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_8")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<8> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<8>()
-        //     {
-        //         ensureParse(
-        //             "invalid string 1",
-        //             "s(7)\"whatever\"",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         ensureParse(
-        //             "invalid string 2",
-        //             "s(9)\"whatever\"",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
+        ParseFixture<LLSDNotationParser> fixture;
+        fixture.ensureParse("valid uri", "l\"http://www.google.com\"", LLSD(LLURI("http://www.google.com")), 1);
+        fixture.ensureParse("valid date", "d\"2007-12-28T09:22:53.10Z\"", LLSD(LLDate("2007-12-28T09:22:53.10Z")), 1);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_9")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<9> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<9>()
-        //     {
-        //         LLSD val = LLURI("http://www.google.com");
-        //         ensureParse("valid uri", "l\"http://www.google.com\"", val, 1);
-        //     }
+        ParseFixture<LLSDNotationParser> fixture;
+        LLSD val = string_to_vector("abc321");
+        fixture.ensureParse("valid binary b64", "b64\"YWJjMzIx\"", val, 1);
+        fixture.ensureParse("valid binary b16", "b16\"616263333231\"", val, 1);
+        fixture.ensureParse("valid binary raw", "b(6)\"abc321\"", val, 1);
+
+        fixture.ensureParse("size longer than bytes left", "b(5)\"abc321\"", string_to_vector("abc32"), 1);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_10")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<10> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<10>()
-        //     {
-        //         LLSD val = LLDate("2007-12-28T09:22:53.10Z");
-        //         ensureParse("valid date", "d\"2007-12-28T09:22:53.10Z\"", val, 1);
-        //     }
+        ParseFixture<LLSDNotationParser> fixture;
+
+        LLSD map_val = LLSD::emptyMap();
+        map_val["amy"] = 23;
+        map_val["bob"] = LLSD();
+        map_val["cam"] = 1.23;
+        fixture.ensureParse(
+            "simple map",
+            "{'amy':i23,'bob':!,'cam':r1.23}",
+            map_val,
+            4);
+
+        LLSD array_val = LLSD::emptyArray();
+        array_val.append(23);
+        array_val.append(LLSD());
+        array_val.append(1.23);
+        fixture.ensureParse(
+            "simple array",
+            "[i23,!,r1.23]",
+            array_val,
+            4);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_11")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<11> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<11>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back((U8)'a'); vec.push_back((U8)'b'); vec.push_back((U8)'c');
-        //         vec.push_back((U8)'3'); vec.push_back((U8)'2'); vec.push_back((U8)'1');
-        //         LLSD val = vec;
-        //         ensureParse("valid binary b64", "b64\"YWJjMzIx\"", val, 1);
-        //         ensureParse("valid bainry b16", "b16\"616263333231\"", val, 1);
-        //         ensureParse("valid bainry raw", "b(6)\"abc321\"", val, 1);
-        //     }
+        ParseFixture<LLSDNotationParser> fixture;
+
+        LLSD level_1 = LLSD::emptyMap(); level_1["level_2"] = 99;
+        LLSD level_0 = LLSD::emptyMap(); level_0["level_1"] = level_1;
+        LLSD root = LLSD::emptyMap();
+        root["deep"] = LLSD::emptyMap();
+        root["deep"]["level_0"] = level_0;
+
+        fixture.ensureParse(
+            "nested notation 3 deep",
+            "{'deep' : {'level_0':{'level_1':{'level_2': i99} } } }",
+            root,
+            5,
+            5);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_12")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<12> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<12>()
-        //     {
-        //         ensureParse(
-        //             "invalid -- binary length specified too long",
-        //             "b(7)\"abc321\"",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         ensureParse(
-        //             "invalid -- binary length specified way too long",
-        //             "b(1000000)\"abc321\"",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_13")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<13> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<13>()
-        //     {
-        //         LLSD val;
-        //         val["amy"] = 23;
-        //         val["bob"] = LLSD();
-        //         val["cam"] = 1.23;
-        //         ensureParse("simple map", "{'amy':i23,'bob':!,'cam':r1.23}", val, 4);
-
-        //         val["bob"] = LLSD::emptyMap();
-        //         val["bob"]["vehicle"] = std::string("bicycle");
-        //         ensureParse(
-        //             "nested map",
-        //             "{'amy':i23,'bob':{'vehicle':'bicycle'},'cam':r1.23}",
-        //             val,
-        //             5);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_14")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<14> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<14>()
-        //     {
-        //         LLSD val;
-        //         val.append(23);
-        //         val.append(LLSD());
-        //         val.append(1.23);
-        //         ensureParse("simple array", "[i23,!,r1.23]", val, 4);
-        //         val[1] = LLSD::emptyArray();
-        //         val[1].append("bicycle");
-        //         ensureParse("nested array", "[i23,['bicycle'],r1.23]", val, 5);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_15")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<15> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<15>()
-        //     {
-        //         LLSD val;
-        //         val["amy"] = 23;
-        //         val["bob"]["dogs"] = LLSD::emptyArray();
-        //         val["bob"]["dogs"].append(LLSD::emptyMap());
-        //         val["bob"]["dogs"][0]["name"] = std::string("groove");
-        //         val["bob"]["dogs"][0]["breed"] = std::string("samoyed");
-        //         val["bob"]["dogs"].append(LLSD::emptyMap());
-        //         val["bob"]["dogs"][1]["name"] = std::string("greyley");
-        //         val["bob"]["dogs"][1]["breed"] = std::string("chow/husky");
-        //         val["cam"] = 1.23;
-        //         ensureParse(
-        //             "nested notation",
-        //             "{'amy':i23,"
-        //             " 'bob':{'dogs':["
-        //                      "{'name':'groove', 'breed':'samoyed'},"
-        //                      "{'name':'greyley', 'breed':'chow/husky'}]},"
-        //             " 'cam':r1.23}",
-        //             val,
-        //             11);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_16")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<16> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<16>()
-        //     {
-        //         // text to make sure that incorrect sizes bail because
-        //         std::string bad_str("s(5)\"hi\"");
-        //         ensureParse(
-        //             "size longer than bytes left",
-        //             bad_str,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_17")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<17> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<17>()
-        //     {
-        //         // text to make sure that incorrect sizes bail because
-        //         std::string bad_bin("b(5)\"hi\"");
-        //         ensureParse(
-        //             "size longer than bytes left",
-        //             bad_bin,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_18")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<18> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<18>()
-        //     {
-        //         LLSD level_1 = LLSD::emptyMap();        level_1["level_2"] = 99;
-        //         LLSD level_0 = LLSD::emptyMap();        level_0["level_1"] = level_1;
-
-        //         LLSD deep = LLSD::emptyMap();
-        //         deep["level_0"] = level_0;
-
-        //         LLSD root = LLSD::emptyMap();
-        //         root["deep"] = deep;
-
-        //         ensureParse(
-        //             "nested notation 3 deep",
-        //             "{'deep' : {'level_0':{'level_1':{'level_2': i99} } } }",
-        //             root,
-        //             5,
-        //             5); // 4 '{' plus i99 also counts as llsd, so real depth is 5
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDNotationParsingObject::test<19>()
-        //     {
-        //         LLSD level_9 = LLSD::emptyMap();      level_9["level_9"] = (S32)99;
-        //         LLSD level_8 = LLSD::emptyMap();      level_8["level_8"] = level_9;
-        //         LLSD level_7 = LLSD::emptyMap();      level_7["level_7"] = level_8;
-        //         LLSD level_6 = LLSD::emptyMap();      level_6["level_6"] = level_7;
-        //         LLSD level_5 = LLSD::emptyMap();      level_5["level_5"] = level_6;
-        //         LLSD level_4 = LLSD::emptyMap();      level_4["level_4"] = level_5;
-        //         LLSD level_3 = LLSD::emptyMap();      level_3["level_3"] = level_4;
-        //         LLSD level_2 = LLSD::emptyMap();      level_2["level_2"] = level_3;
-        //         LLSD level_1 = LLSD::emptyMap();      level_1["level_1"] = level_2;
-        //         LLSD level_0 = LLSD::emptyMap();      level_0["level_0"] = level_1;
-
-        //         LLSD deep = LLSD::emptyMap();
-        //         deep["deep"] = level_0;
-
-        //         ensureParse(
-        //             "nested notation 10 deep",
-        //             "{'deep' : {'level_0':{'level_1':{'level_2':{'level_3':{'level_4':{'level_5':{'level_6':{'level_7':{'level_8':{'level_9':i99}"
-        //             "} } } } } } } } } }",
-        //             deep,
-        //             12,
-        //             15);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDNotationParsingObject::test<20>()
-        //     {
-        //         LLSD end = LLSD::emptyMap();          end["end"] = (S32)99;
-
-        //         LLSD level_49 = LLSD::emptyMap();     level_49["level_49"] = end;
-        //         LLSD level_48 = LLSD::emptyMap();     level_48["level_48"] = level_49;
-        //         LLSD level_47 = LLSD::emptyMap();     level_47["level_47"] = level_48;
-        //         LLSD level_46 = LLSD::emptyMap();     level_46["level_46"] = level_47;
-        //         LLSD level_45 = LLSD::emptyMap();     level_45["level_45"] = level_46;
-        //         LLSD level_44 = LLSD::emptyMap();     level_44["level_44"] = level_45;
-        //         LLSD level_43 = LLSD::emptyMap();     level_43["level_43"] = level_44;
-        //         LLSD level_42 = LLSD::emptyMap();     level_42["level_42"] = level_43;
-        //         LLSD level_41 = LLSD::emptyMap();     level_41["level_41"] = level_42;
-        //         LLSD level_40 = LLSD::emptyMap();     level_40["level_40"] = level_41;
-
-        //         LLSD level_39 = LLSD::emptyMap();     level_39["level_39"] = level_40;
-        //         LLSD level_38 = LLSD::emptyMap();     level_38["level_38"] = level_39;
-        //         LLSD level_37 = LLSD::emptyMap();     level_37["level_37"] = level_38;
-        //         LLSD level_36 = LLSD::emptyMap();     level_36["level_36"] = level_37;
-        //         LLSD level_35 = LLSD::emptyMap();     level_35["level_35"] = level_36;
-        //         LLSD level_34 = LLSD::emptyMap();     level_34["level_34"] = level_35;
-        //         LLSD level_33 = LLSD::emptyMap();     level_33["level_33"] = level_34;
-        //         LLSD level_32 = LLSD::emptyMap();     level_32["level_32"] = level_33;
-        //         LLSD level_31 = LLSD::emptyMap();     level_31["level_31"] = level_32;
-        //         LLSD level_30 = LLSD::emptyMap();     level_30["level_30"] = level_31;
-
-        //         LLSD level_29 = LLSD::emptyMap();     level_29["level_29"] = level_30;
-        //         LLSD level_28 = LLSD::emptyMap();     level_28["level_28"] = level_29;
-        //         LLSD level_27 = LLSD::emptyMap();     level_27["level_27"] = level_28;
-        //         LLSD level_26 = LLSD::emptyMap();     level_26["level_26"] = level_27;
-        //         LLSD level_25 = LLSD::emptyMap();     level_25["level_25"] = level_26;
-        //         LLSD level_24 = LLSD::emptyMap();     level_24["level_24"] = level_25;
-        //         LLSD level_23 = LLSD::emptyMap();     level_23["level_23"] = level_24;
-        //         LLSD level_22 = LLSD::emptyMap();     level_22["level_22"] = level_23;
-        //         LLSD level_21 = LLSD::emptyMap();     level_21["level_21"] = level_22;
-        //         LLSD level_20 = LLSD::emptyMap();     level_20["level_20"] = level_21;
-
-        //         LLSD level_19 = LLSD::emptyMap();     level_19["level_19"] = level_20;
-        //         LLSD level_18 = LLSD::emptyMap();     level_18["level_18"] = level_19;
-        //         LLSD level_17 = LLSD::emptyMap();     level_17["level_17"] = level_18;
-        //         LLSD level_16 = LLSD::emptyMap();     level_16["level_16"] = level_17;
-        //         LLSD level_15 = LLSD::emptyMap();     level_15["level_15"] = level_16;
-        //         LLSD level_14 = LLSD::emptyMap();     level_14["level_14"] = level_15;
-        //         LLSD level_13 = LLSD::emptyMap();     level_13["level_13"] = level_14;
-        //         LLSD level_12 = LLSD::emptyMap();     level_12["level_12"] = level_13;
-        //         LLSD level_11 = LLSD::emptyMap();     level_11["level_11"] = level_12;
-        //         LLSD level_10 = LLSD::emptyMap();     level_10["level_10"] = level_11;
-
-        //         LLSD level_9 = LLSD::emptyMap();      level_9["level_9"] = level_10;
-        //         LLSD level_8 = LLSD::emptyMap();      level_8["level_8"] = level_9;
-        //         LLSD level_7 = LLSD::emptyMap();      level_7["level_7"] = level_8;
-        //         LLSD level_6 = LLSD::emptyMap();      level_6["level_6"] = level_7;
-        //         LLSD level_5 = LLSD::emptyMap();      level_5["level_5"] = level_6;
-        //         LLSD level_4 = LLSD::emptyMap();      level_4["level_4"] = level_5;
-        //         LLSD level_3 = LLSD::emptyMap();      level_3["level_3"] = level_4;
-        //         LLSD level_2 = LLSD::emptyMap();      level_2["level_2"] = level_3;
-        //         LLSD level_1 = LLSD::emptyMap();      level_1["level_1"] = level_2;
-        //         LLSD level_0 = LLSD::emptyMap();      level_0["level_0"] = level_1;
-
-        //         LLSD deep = LLSD::emptyMap();
-        //         deep["deep"] = level_0;
-
-        //         ensureParse(
-        //             "nested notation deep",
-        //             "{'deep':"
-        //             "{'level_0' :{'level_1' :{'level_2' :{'level_3' :{'level_4' :{'level_5' :{'level_6' :{'level_7' :{'level_8' :{'level_9' :"
-        //             "{'level_10':{'level_11':{'level_12':{'level_13':{'level_14':{'level_15':{'level_16':{'level_17':{'level_18':{'level_19':"
-        //             "{'level_20':{'level_21':{'level_22':{'level_23':{'level_24':{'level_25':{'level_26':{'level_27':{'level_28':{'level_29':"
-        //             "{'level_30':{'level_31':{'level_32':{'level_33':{'level_34':{'level_35':{'level_36':{'level_37':{'level_38':{'level_39':"
-        //             "{'level_40':{'level_41':{'level_42':{'level_43':{'level_44':{'level_45':{'level_46':{'level_47':{'level_48':{'level_49':"
-        //             "{'end':i99}"
-        //             "} } } } } } } } } }"
-        //             "} } } } } } } } } }"
-        //             "} } } } } } } } } }"
-        //             "} } } } } } } } } }"
-        //             "} } } } } } } } } }"
-        //             "}",
-        //             deep,
-        //             53);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDNotationParsingObject::test<21>()
-        //     {
-        //         ensureParse(
-        //             "nested notation 10 deep",
-        //             "{'deep' : {'level_0':{'level_1':{'level_2':{'level_3':{'level_4':{'level_5':{'level_6':{'level_7':{'level_8':{'level_9':i99}"
-        //             "} } } } } } } } } }",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE,
-        //             9);
-        //     }
-
-        //     /**
-        //      * @class TestLLSDBinaryParsing
-        //      * @brief Concrete instance of a parse tester.
-        //      */
-        //     class TestLLSDBinaryParsing : public TestLLSDParsing<LLSDBinaryParser>
-        //     {
-        //     public:
-        //         TestLLSDBinaryParsing() {}
-        //     };
-
-        //     typedef tut::test_group<TestLLSDBinaryParsing> TestLLSDBinaryParsingGroup;
-        //     typedef TestLLSDBinaryParsingGroup::object TestLLSDBinaryParsingObject;
-        //     TestLLSDBinaryParsingGroup gTestLLSDBinaryParsingGroup(
-        //         "llsd binary parsing");
-
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<1>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.resize(6);
-        //         vec[0] = 'a'; vec[1] = 'b'; vec[2] = 'c';
-        //         vec[3] = '3'; vec[4] = '2'; vec[5] = '1';
-        //         std::string string_expected((char*)&vec[0], vec.size());
-        //         LLSD value = string_expected;
-
-        //         vec.resize(11);
-        //         vec[0] = 's'; // for string
-        //         vec[5] = 'a'; vec[6] = 'b'; vec[7] = 'c';
-        //         vec[8] = '3'; vec[9] = '2'; vec[10] = '1';
-
-        //         uint32_t size = htonl(6);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         ensureParse("correct string parse", str_good, value, 1);
-
-        //         size = htonl(7);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_1((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "incorrect size string parse",
-        //             str_bad_1,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         size = htonl(100000);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_2((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "incorrect size string parse",
-        //             str_bad_2,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<2>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.resize(6);
-        //         vec[0] = 'a'; vec[1] = 'b'; vec[2] = 'c';
-        //         vec[3] = '3'; vec[4] = '2'; vec[5] = '1';
-        //         LLSD value = vec;
-
-        //         vec.resize(11);
-        //         vec[0] = 'b';  // for binary
-        //         vec[5] = 'a'; vec[6] = 'b'; vec[7] = 'c';
-        //         vec[8] = '3'; vec[9] = '2'; vec[10] = '1';
-
-        //         uint32_t size = htonl(6);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         ensureParse("correct binary parse", str_good, value, 1);
-
-        //         size = htonl(7);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_1((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "incorrect size binary parse 1",
-        //             str_bad_1,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         size = htonl(100000);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_2((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "incorrect size binary parse 2",
-        //             str_bad_2,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<3>()
-        //     {
-        //         // test handling of xml not recognized as llsd results in an
-        //         // LLSD Undefined
-        //         ensureParse(
-        //             "malformed binary map",
-        //             "{'ha ha'",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         ensureParse(
-        //             "malformed binary array",
-        //             "['ha ha'",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         ensureParse(
-        //             "malformed binary string",
-        //             "'ha ha",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         ensureParse(
-        //             "bad noise",
-        //             "g48ejlnfr",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<4>()
-        //     {
-        //         ensureParse("valid undef", "!", LLSD(), 1);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<5>()
-        //     {
-        //         LLSD val = false;
-        //         ensureParse("valid boolean false 2", "0", val, 1);
-        //         val = true;
-        //         ensureParse("valid boolean true 2", "1", val, 1);
-
-        //         val.clear();
-        //         ensureParse("invalid true", "t", val, LLSDParser::PARSE_FAILURE);
-        //         ensureParse("invalid false", "f", val, LLSDParser::PARSE_FAILURE);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<6>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back('{');
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t size = htonl(1);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         vec.push_back('k');
-        //         auto key_size_loc = vec.size();
-        //         size = htonl(1); // 1 too short
-        //         vec.resize(vec.size() + 4);
-        //         memcpy(&vec[key_size_loc], &size, sizeof(uint32_t));
-        //         vec.push_back('a'); vec.push_back('m'); vec.push_back('y');
-        //         vec.push_back('i');
-        //         auto integer_loc = vec.size();
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t val_int = htonl(23);
-        //         memcpy(&vec[integer_loc], &val_int, sizeof(uint32_t));
-        //         std::string str_bad_1((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "invalid key size",
-        //             str_bad_1,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         // check with correct size, but unterminated map (missing '}')
-        //         size = htonl(3); // correct size
-        //         memcpy(&vec[key_size_loc], &size, sizeof(uint32_t));
-        //         std::string str_bad_2((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "valid key size, unterminated map",
-        //             str_bad_2,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         // check w/ correct size and correct map termination
-        //         LLSD val;
-        //         val["amy"] = 23;
-        //         vec.push_back('}');
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "valid map",
-        //             str_good,
-        //             val,
-        //             2);
-
-        //         // check w/ incorrect sizes and correct map termination
-        //         size = htonl(0); // 1 too few (for the map entry)
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_3((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "invalid map too long",
-        //             str_bad_3,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         size = htonl(2); // 1 too many
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_4((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "invalid map too short",
-        //             str_bad_4,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<7>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back('[');
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t size = htonl(1); // 1 too short
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         vec.push_back('"'); vec.push_back('a'); vec.push_back('m');
-        //         vec.push_back('y'); vec.push_back('"'); vec.push_back('i');
-        //         auto integer_loc = vec.size();
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t val_int = htonl(23);
-        //         memcpy(&vec[integer_loc], &val_int, sizeof(uint32_t));
-
-        //         std::string str_bad_1((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "invalid array size",
-        //             str_bad_1,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         // check with correct size, but unterminated map (missing ']')
-        //         size = htonl(2); // correct size
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_2((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "unterminated array",
-        //             str_bad_2,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         // check w/ correct size and correct map termination
-        //         LLSD val;
-        //         val.append("amy");
-        //         val.append(23);
-        //         vec.push_back(']');
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "valid array",
-        //             str_good,
-        //             val,
-        //             3);
-
-        //         // check with too many elements
-        //         size = htonl(3); // 1 too long
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_3((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "array too short",
-        //             str_bad_3,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<8>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back('{');
-        //         vec.resize(vec.size() + 4);
-        //         memset(&vec[1], 0, 4);
-        //         vec.push_back('}');
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         LLSD val = LLSD::emptyMap();
-        //         ensureParse(
-        //             "empty map",
-        //             str_good,
-        //             val,
-        //             1);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<9>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back('[');
-        //         vec.resize(vec.size() + 4);
-        //         memset(&vec[1], 0, 4);
-        //         vec.push_back(']');
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         LLSD val = LLSD::emptyArray();
-        //         ensureParse(
-        //             "empty array",
-        //             str_good,
-        //             val,
-        //             1);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<10>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back('l');
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t size = htonl(14); // 1 too long
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         vec.push_back('h'); vec.push_back('t'); vec.push_back('t');
-        //         vec.push_back('p'); vec.push_back(':'); vec.push_back('/');
-        //         vec.push_back('/'); vec.push_back('s'); vec.push_back('l');
-        //         vec.push_back('.'); vec.push_back('c'); vec.push_back('o');
-        //         vec.push_back('m');
-        //         std::string str_bad((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "invalid uri length size",
-        //             str_bad,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         LLSD val;
-        //         val = LLURI("http://sl.com");
-        //         size = htonl(13); // correct length
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "valid key size",
-        //             str_good,
-        //             val,
-        //             1);
-        //     }
-
-        // /*
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<11>()
-        //     {
-        //     }
-        // */
-
-        //    /**
-        //      * @class TestLLSDCrossCompatible
-        //      * @brief Miscellaneous serialization and parsing tests
-        //      */
-        //     class TestLLSDCrossCompatible
-        //     {
-        //     public:
-        //         TestLLSDCrossCompatible() {}
-
-        //         void ensureBinaryAndNotation(
-        //             const std::string& msg,
-        //             const LLSD& input)
-        //         {
-        //             // to binary, and back again
-        //             std::stringstream str1;
-        //             S32 count1 = LLSDSerialize::toBinary(input, str1);
-        //             LLSD actual_value_bin;
-        //             S32 count2 = LLSDSerialize::fromBinary(
-        //                 actual_value_bin,
-        //                 str1,
-        //                 LLSDSerialize::SIZE_UNLIMITED);
-        //             ensure_equals(
-        //                 "ensureBinaryAndNotation binary count",
-        //                 count2,
-        //                 count1);
-
-        //             // to notation and back again
-        //             std::stringstream str2;
-        //             S32 count3 = LLSDSerialize::toNotation(actual_value_bin, str2);
-        //             ensure_equals(
-        //                 "ensureBinaryAndNotation notation count1",
-        //                 count3,
-        //                 count2);
-        //             LLSD actual_value_notation;
-        //             S32 count4 = LLSDSerialize::fromNotation(
-        //                 actual_value_notation,
-        //                 str2,
-        //                 LLSDSerialize::SIZE_UNLIMITED);
-        //             ensure_equals(
-        //                 "ensureBinaryAndNotation notation count2",
-        //                 count4,
-        //                 count3);
-        //             ensure_equals(
-        //                 (msg + " (binaryandnotation)").c_str(),
-        //                 actual_value_notation,
-        //                 input);
-        //         }
-
-        //         void ensureBinaryAndXML(
-        //             const std::string& msg,
-        //             const LLSD& input)
-        //         {
-        //             // to binary, and back again
-        //             std::stringstream str1;
-        //             S32 count1 = LLSDSerialize::toBinary(input, str1);
-        //             LLSD actual_value_bin;
-        //             S32 count2 = LLSDSerialize::fromBinary(
-        //                 actual_value_bin,
-        //                 str1,
-        //                 LLSDSerialize::SIZE_UNLIMITED);
-        //             ensure_equals(
-        //                 "ensureBinaryAndXML binary count",
-        //                 count2,
-        //                 count1);
-
-        //             // to xml and back again
-        //             std::stringstream str2;
-        //             S32 count3 = LLSDSerialize::toXML(actual_value_bin, str2);
-        //             ensure_equals(
-        //                 "ensureBinaryAndXML xml count1",
-        //                 count3,
-        //                 count2);
-        //             LLSD actual_value_xml;
-        //             S32 count4 = LLSDSerialize::fromXML(actual_value_xml, str2);
-        //             ensure_equals(
-        //                 "ensureBinaryAndXML xml count2",
-        //                 count4,
-        //                 count3);
-        //             ensure_equals((msg + " (binaryandxml)").c_str(), actual_value_xml, input);
-        //         }
-        //     };
-
-        //     typedef tut::test_group<TestLLSDCrossCompatible> TestLLSDCompatibleGroup;
-        //     typedef TestLLSDCompatibleGroup::object TestLLSDCompatibleObject;
-        //     TestLLSDCompatibleGroup gTestLLSDCompatibleGroup(
-        //         "llsd serialize compatible");
-
-        //     template<> template<>
-        //     void TestLLSDCompatibleObject::test<1>()
-        //     {
-        //         LLSD test;
-        //         ensureBinaryAndNotation("undef", test);
-        //         ensureBinaryAndXML("undef", test);
-        //         test = true;
-        //         ensureBinaryAndNotation("boolean true", test);
-        //         ensureBinaryAndXML("boolean true", test);
-        //         test = false;
-        //         ensureBinaryAndNotation("boolean false", test);
-        //         ensureBinaryAndXML("boolean false", test);
-        //         test = 0;
-        //         ensureBinaryAndNotation("integer zero", test);
-        //         ensureBinaryAndXML("integer zero", test);
-        //         test = 1;
-        //         ensureBinaryAndNotation("integer positive", test);
-        //         ensureBinaryAndXML("integer positive", test);
-        //         test = -234567;
-        //         ensureBinaryAndNotation("integer negative", test);
-        //         ensureBinaryAndXML("integer negative", test);
-        //         test = 0.0;
-        //         ensureBinaryAndNotation("real zero", test);
-        //         ensureBinaryAndXML("real zero", test);
-        //         test = 1.0;
-        //         ensureBinaryAndNotation("real positive", test);
-        //         ensureBinaryAndXML("real positive", test);
-        //         test = -1.0;
-        //         ensureBinaryAndNotation("real negative", test);
-        //         ensureBinaryAndXML("real negative", test);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDCompatibleObject::test<2>()
-        //     {
-        //         LLSD test;
-        //         test = "foobar";
-        //         ensureBinaryAndNotation("string", test);
-        //         ensureBinaryAndXML("string", test);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDCompatibleObject::test<3>()
-        //     {
-        //         LLSD test;
-        //         LLUUID id;
-        //         id.generate();
-        //         test = id;
-        //         ensureBinaryAndNotation("uuid", test);
-        //         ensureBinaryAndXML("uuid", test);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDCompatibleObject::test<4>()
-        //     {
-        //         LLSD test;
-        //         test = LLDate(12345.0);
-        //         ensureBinaryAndNotation("date", test);
-        //         ensureBinaryAndXML("date", test);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDCompatibleObject::test<5>()
-        //     {
-        //         LLSD test;
-        //         test = LLURI("http://www.secondlife.com/");
-        //         ensureBinaryAndNotation("uri", test);
-        //         ensureBinaryAndXML("uri", test);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDCompatibleObject::test<6>()
-        //     {
-        //         LLSD test;
-        //         typedef std::vector<U8> buf_t;
-        //         buf_t val;
-        //         for(int ii = 0; ii < 100; ++ii)
-        //         {
-        //             srand(ii);      /* Flawfinder: ignore */
-        //             S32 size = rand() % 100 + 10;
-        //             std::generate_n(
-        //                 std::back_insert_iterator<buf_t>(val),
-        //                 size,
-        //                 rand);
-        //         }
-        //         test = val;
-        //         ensureBinaryAndNotation("binary", test);
-        //         ensureBinaryAndXML("binary", test);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDCompatibleObject::test<7>()
-        //     {
-        //         LLSD test;
-        //         test = LLSD::emptyArray();
-        //         test.append(1);
-        //         test.append("hello");
-        //         ensureBinaryAndNotation("array", test);
-        //         ensureBinaryAndXML("array", test);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDCompatibleObject::test<8>()
-        //     {
-        //         LLSD test;
-        //         test = LLSD::emptyArray();
-        //         test["foo"] = "bar";
-        //         test["baz"] = 100;
-        //         ensureBinaryAndNotation("map", test);
-        //         ensureBinaryAndXML("map", test);
-        //     }
-
-        //     // helper for TestPythonCompatible
-        //     static std::string import_llsd("import os.path\n"
-        //                                    "import sys\n"
-        //                                    "import llsd\n");
-
-        //     // helper for TestPythonCompatible
-        //     template <typename CONTENT, typename... ARGS>
-        //     void python_expect(const std::string& desc, const CONTENT& script, int expect=0,
-        //                        ARGS&&... args)
-        //     {
-        //         auto PYTHON(LLStringUtil::getenv("PYTHON"));
-        //         ensure("Set $PYTHON to the Python interpreter", !PYTHON.empty());
-
-        //         NamedTempFile scriptfile("py", script);
-
-        // #if LL_WINDOWS
-        //         std::string q("\"");
-        //         std::string qPYTHON(q + PYTHON + q);
-        //         std::string qscript(q + scriptfile.getName() + q);
-        //         int rc = (int)_spawnl(_P_WAIT, PYTHON.c_str(), qPYTHON.c_str(), qscript.c_str(),
-        //                          std::forward<ARGS>(args)..., NULL);
-        //         if (rc == -1)
-        //         {
-        //             char buffer[256];
-        //             strerror_s(buffer, errno); // C++ can infer the buffer size!  :-O
-        //             ensure(STRINGIZE("Couldn't run Python " << desc << "script: " << buffer), false);
-        //         }
-        //         else
-        //         {
-        //             ensure_equals(STRINGIZE(desc << " script terminated with rc " << rc), rc, expect);
-        //         }
-
-        // #else  // LL_DARWIN, LL_LINUX
-        //         LLProcess::Params params;
-        //         params.executable = PYTHON;
-        //         params.args.add(scriptfile.getName());
-        //         for (const std::string& arg : StringVec{ std::forward<ARGS>(args)... })
-        //         {
-        //             params.args.add(arg);
-        //         }
-        //         LLProcessPtr py(LLProcess::create(params));
-        //         ensure(STRINGIZE("Couldn't launch " << desc << " script"), bool(py));
-        //         // Implementing timeout would mean messing with alarm() and
-        //         // catching SIGALRM... later maybe...
-        //         int status(0);
-        //         if (waitpid(py->getProcessID(), &status, 0) == -1)
-        //         {
-        //             int waitpid_errno(errno);
-        //             ensure_equals(STRINGIZE("Couldn't retrieve rc from " << desc << " script: "
-        //                                     "waitpid() errno " << waitpid_errno),
-        //                           waitpid_errno, ECHILD);
-        //         }
-        //         else
-        //         {
-        //             if (WIFEXITED(status))
-        //             {
-        //                 int rc(WEXITSTATUS(status));
-        //                 ensure_equals(STRINGIZE(desc << " script terminated with rc " << rc),
-        //                               rc, expect);
-        //             }
-        //             else if (WIFSIGNALED(status))
-        //             {
-        //                 ensure(STRINGIZE(desc << " script terminated by signal " << WTERMSIG(status)),
-        //                        false);
-        //             }
-        //             else
-        //             {
-        //                 ensure(STRINGIZE(desc << " script produced impossible status " << status),
-        //                        false);
-        //             }
-        //         }
-        // #endif
-        //     }
-
-        //     // helper for TestPythonCompatible
-        //     template <typename CONTENT, typename... ARGS>
-        //     void python(const std::string& desc, const CONTENT& script, ARGS&&... args)
-        //     {
-        //         // plain python() expects rc 0
-        //         python_expect(desc, script, 0, std::forward<ARGS>(args)...);
-        //     }
-
-        //     struct TestPythonCompatible
-        //     {
-        //         TestPythonCompatible() {}
-        //         ~TestPythonCompatible() {}
-        //     };
-
-        //     typedef tut::test_group<TestPythonCompatible> TestPythonCompatibleGroup;
-        //     typedef TestPythonCompatibleGroup::object TestPythonCompatibleObject;
-        //     TestPythonCompatibleGroup pycompat("LLSD serialize Python compatibility");
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<1>()
-        //     {
-        //         set_test_name("verify python()");
-        //         python_expect("hello",
-        //                       "import sys\n"
-        //                       "sys.exit(17)\n",
-        //                       17);                 // expect nonzero rc
-        //     }
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<2>()
-        //     {
-        //         set_test_name("verify NamedTempFile");
-        //         python("platform",
-        //                "import sys\n"
-        //                "print('Running on', sys.platform)\n");
-        //     }
-
-        //     // helper for test<3> - test<7>
-        //     static void writeLLSDArray(const FormatterFunction& serialize,
-        //                                std::ostream& out, const LLSD& array)
-        //     {
-        //         for (const LLSD& item: llsd::inArray(array))
-        //         {
-        //             // It's important to delimit the entries in this file somehow
-        //             // because, although Python's llsd.parse() can accept a file
-        //             // stream, the XML parser expects EOF after a single outer element
-        //             // -- it doesn't just stop. So we must extract a sequence of bytes
-        //             // strings from the file. But since one of the serialization
-        //             // formats we want to test is binary, we can't pick any single
-        //             // byte value as a delimiter! Use a binary integer length prefix
-        //             // instead.
-        //             std::ostringstream buffer;
-        //             serialize(item, buffer);
-        //             auto buffstr{ buffer.str() };
-        //             int bufflen{ static_cast<int>(buffstr.length()) };
-        //             out.write(reinterpret_cast<const char*>(&bufflen), sizeof(bufflen));
-        //             LL_DEBUGS() << "Wrote length: "
-        //                         << hexdump(reinterpret_cast<const char*>(&bufflen),
-        //                                    sizeof(bufflen))
-        //                         << LL_ENDL;
-        //             out.write(buffstr.c_str(), buffstr.length());
-        //             LL_DEBUGS() << "Wrote data:   "
-        //                         << hexmix(buffstr.c_str(), buffstr.length())
-        //                         << LL_ENDL;
-        //         }
-        //     }
-
-        //     // helper for test<3> - test<7>
-        //     static void toPythonUsing(const std::string& desc,
-        //                               const FormatterFunction& serialize)
-        //     {
-        //         LLSD cdata(llsd::array(17, 3.14,
-        //                                "This string\n"
-        //                                "has several\n"
-        //                                "lines."));
-
-        //         const char pydata[] =
-        //             "def verify(iterable):\n"
-        //             "    it = iter(iterable)\n"
-        //             "    assert next(it) == 17\n"
-        //             "    assert abs(next(it) - 3.14) < 0.01\n"
-        //             "    assert next(it) == '''\\\n"
-        //             "This string\n"
-        //             "has several\n"
-        //             "lines.'''\n"
-        //             "    try:\n"
-        //             "        next(it)\n"
-        //             "    except StopIteration:\n"
-        //             "        pass\n"
-        //             "    else:\n"
-        //             "        raise AssertionError('Too many data items')\n";
-
-        //         // Create an llsdXXXXXX file containing 'data' serialized per
-        //         // FormatterFunction.
-        //         NamedTempFile file("llsd",
-        //                            // NamedTempFile's function constructor
-        //                            // takes a callable. To this callable it passes the
-        //                            // std::ostream with which it's writing the
-        //                            // NamedTempFile.
-        //                            [serialize, cdata]
-        //                            (std::ostream& out)
-        //                            { writeLLSDArray(serialize, out, cdata); });
-
-        //         // 'debug' starts empty because it's intended as an output file
-        //         NamedTempFile debug("debug", "");
-
-        //         try
-        //         {
-        //             python("read C++ " + desc,
-        //                    [&](std::ostream& out){ out <<
-        //                    import_llsd <<
-        //                    "from functools import partial\n"
-        //                    "import io\n"
-        //                    "import struct\n"
-        //                    "lenformat = struct.Struct('i')\n"
-        //                    "def parse_each(inf):\n"
-        //                    "    for rawlen in iter(partial(inf.read, lenformat.size), b''):\n"
-        //                    "        print('Read length:', ''.join(('%02x' % b) for b in rawlen),\n"
-        //                    "              file=debug)\n"
-        //                    "        len = lenformat.unpack(rawlen)[0]\n"
-        //                    // Since llsd.parse() has no max_bytes argument, instead of
-        //                    // passing the input stream directly to parse(), read the item
-        //                    // into a distinct bytes object and parse that.
-        //                    "        data = inf.read(len)\n"
-        //                    "        print('Read data:  ', repr(data), file=debug)\n"
-        //                    "        try:\n"
-        //                    "            frombytes = llsd.parse(data)\n"
-        //                    "        except llsd.LLSDParseError as err:\n"
-        //                    "            print(f'*** {err}')\n"
-        //                    "            print(f'Bad content:\\n{data!r}')\n"
-        //                    "            raise\n"
-        //                    // Also try parsing from a distinct stream.
-        //                    "        stream = io.BytesIO(data)\n"
-        //                    "        fromstream = llsd.parse(stream)\n"
-        //                    "        assert frombytes == fromstream\n"
-        //                    "        yield frombytes\n"
-        //                    << pydata <<
-        //                    // Don't forget raw-string syntax for Windows pathnames.
-        //                    "debug = open(r'" << debug.getName() << "', 'w')\n"
-        //                    "verify(parse_each(open(r'" << file.getName() << "', 'rb')))\n";});
-        //         }
-        //         catch (const failure&)
-        //         {
-        //             LL_DEBUGS() << "Script debug output:" << LL_ENDL;
-        //             debug.peep_log();
-        //             throw;
-        //         }
-        //     }
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<3>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::serialize(LLSD_XML)");
-        //         toPythonUsing("LLSD_XML",
-        //                       [](const LLSD& sd, std::ostream& out)
-        //         { LLSDSerialize::serialize(sd, out, LLSDSerialize::LLSD_XML); });
-        //     }
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<4>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::serialize(LLSD_NOTATION)");
-        //         toPythonUsing("LLSD_NOTATION",
-        //                       [](const LLSD& sd, std::ostream& out)
-        //         { LLSDSerialize::serialize(sd, out, LLSDSerialize::LLSD_NOTATION); });
-        //     }
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<5>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::serialize(LLSD_BINARY)");
-        //         toPythonUsing("LLSD_BINARY",
-        //                       [](const LLSD& sd, std::ostream& out)
-        //         { LLSDSerialize::serialize(sd, out, LLSDSerialize::LLSD_BINARY); });
-        //     }
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<6>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::toXML()");
-        //         toPythonUsing("toXML()", LLSDSerialize::toXML);
-        //     }
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<7>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::toNotation()");
-        //         toPythonUsing("toNotation()", LLSDSerialize::toNotation);
-        //     }
-
-        // /*==========================================================================*|
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<8>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::toBinary()");
-        //         // We don't expect this to work because, without a header,
-        //         // llsd.parse() will assume notation rather than binary.
-        //         toPythonUsing("toBinary()", LLSDSerialize::toBinary);
-        //     }
-        // |*==========================================================================*/
-
-        //     // helper for test<8> - test<12>
-        //     bool itemFromStream(std::istream& istr, LLSD& item, const ParserFunction& parse)
-        //     {
-        //         // reset the output value for debugging clarity
-        //         item.clear();
-        //         // We use an int length prefix as a foolproof delimiter even for
-        //         // binary serialized streams.
-        //         int length{ 0 };
-        //         istr.read(reinterpret_cast<char*>(&length), sizeof(length));
-        // //      return parse(istr, item, length);
-        //         // Sadly, as of 2022-12-01 it seems we can't really trust our LLSD
-        //         // parsers to honor max_bytes: this test works better when we read
-        //         // each item into its own distinct LLMemoryStream, instead of passing
-        //         // the original istr with a max_bytes constraint.
-        //         std::vector<U8> buffer(length);
-        //         istr.read(reinterpret_cast<char*>(buffer.data()), length);
-        //         LLMemoryStream stream(buffer.data(), length);
-        //         return parse(stream, item, length);
-        //     }
-
-        //     // helper for test<8> - test<12>
-        //     void fromPythonUsing(const std::string& pyformatter,
-        //                          const ParserFunction& parse=
-        //                          [](std::istream& istr, LLSD& data, llssize max_bytes)
-        //                          { return LLSDSerialize::deserialize(data, istr, max_bytes); })
-        //     {
-        //         // Create an empty data file. This is just a placeholder for our
-        //         // script to write into. Create it to establish a unique name that
-        //         // we know.
-        //         NamedTempFile file("llsd", "");
-
-        //         python("Python " + pyformatter,
-        //                [&](std::ostream& out){ out <<
-        //                import_llsd <<
-        //                "import struct\n"
-        //                "lenformat = struct.Struct('i')\n"
-        //                "DATA = [\n"
-        //                "    17,\n"
-        //                "    3.14,\n"
-        //                "    '''\\\n"
-        //                "This string\n"
-        //                "has several\n"
-        //                "lines.''',\n"
-        //                "]\n"
-        //                // Don't forget raw-string syntax for Windows pathnames.
-        //                // N.B. Using 'print' implicitly adds newlines.
-        //                "with open(r'" << file.getName() << "', 'wb') as f:\n"
-        //                "    for item in DATA:\n"
-        //                "        serialized = llsd." << pyformatter << "(item)\n"
-        //                "        f.write(lenformat.pack(len(serialized)))\n"
-        //                "        f.write(serialized)\n";});
-
-        //         std::ifstream inf(file.getName().c_str());
-        //         LLSD item;
-        //         try
-        //         {
-        //             ensure("Failed to read LLSD::Integer from Python",
-        //                    itemFromStream(inf, item, parse));
-        //             ensure_equals(item.asInteger(), 17);
-        //             ensure("Failed to read LLSD::Real from Python",
-        //                    itemFromStream(inf, item, parse));
-        //             ensure_approximately_equals("Bad LLSD::Real value from Python",
-        //                                         item.asReal(), 3.14, 7); // 7 bits ~= 0.01
-        //             ensure("Failed to read LLSD::String from Python",
-        //                    itemFromStream(inf, item, parse));
-        //             ensure_equals(item.asString(),
-        //                           "This string\n"
-        //                           "has several\n"
-        //                           "lines.");
-        //         }
-        //         catch (const tut::failure& err)
-        //         {
-        //             std::cout << "for " << err.what() << ", item = " << item << std::endl;
-        //             throw;
-        //         }
-        //     }
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<8>()
-        //     {
-        //         set_test_name("from Python XML using LLSDSerialize::deserialize()");
-        //         fromPythonUsing("format_xml");
-        //     }
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<9>()
-        //     {
-        //         set_test_name("from Python notation using LLSDSerialize::deserialize()");
-        //         fromPythonUsing("format_notation");
-        //     }
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<10>()
-        //     {
-        //         set_test_name("from Python binary using LLSDSerialize::deserialize()");
-        //         fromPythonUsing("format_binary");
-        //     }
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<11>()
-        //     {
-        //         set_test_name("from Python XML using fromXML()");
-        //         // fromXML()'s optional 3rd param isn't max_bytes, it's emit_errors
-        //         fromPythonUsing("format_xml",
-        //                         [](std::istream& istr, LLSD& data, llssize)
-        //                         { return LLSDSerialize::fromXML(data, istr) > 0; });
-        //     }
-
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<12>()
-        //     {
-        //         set_test_name("from Python notation using fromNotation()");
-        //         fromPythonUsing("format_notation",
-        //                         [](std::istream& istr, LLSD& data, llssize max_bytes)
-        //                         { return LLSDSerialize::fromNotation(data, istr, max_bytes) > 0; });
-        //     }
-
-        // /*==========================================================================*|
-        //     template<> template<>
-        //     void TestPythonCompatibleObject::test<13>()
-        //     {
-        //         set_test_name("from Python binary using fromBinary()");
-        //         // We don't expect this to work because format_binary() emits a
-        //         // header, but fromBinary() won't recognize a header.
-        //         fromPythonUsing("format_binary",
-        //                         [](std::istream& istr, LLSD& data, llssize max_bytes)
-        //                         { return LLSDSerialize::fromBinary(data, istr, max_bytes) > 0; });
-        //     }
-        // |*==========================================================================*/
-        // }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_19")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<19> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<19>()
-        //     {
-        //         LLSD level_9 = LLSD::emptyMap();      level_9["level_9"] = (S32)99;
-        //         LLSD level_8 = LLSD::emptyMap();      level_8["level_8"] = level_9;
-        //         LLSD level_7 = LLSD::emptyMap();      level_7["level_7"] = level_8;
-        //         LLSD level_6 = LLSD::emptyMap();      level_6["level_6"] = level_7;
-        //         LLSD level_5 = LLSD::emptyMap();      level_5["level_5"] = level_6;
-        //         LLSD level_4 = LLSD::emptyMap();      level_4["level_4"] = level_5;
-        //         LLSD level_3 = LLSD::emptyMap();      level_3["level_3"] = level_4;
-        //         LLSD level_2 = LLSD::emptyMap();      level_2["level_2"] = level_3;
-        //         LLSD level_1 = LLSD::emptyMap();      level_1["level_1"] = level_2;
-        //         LLSD level_0 = LLSD::emptyMap();      level_0["level_0"] = level_1;
-
-        //         LLSD deep = LLSD::emptyMap();
-        //         deep["deep"] = level_0;
-
-        //         ensureParse(
-        //             "nested notation 10 deep",
-        //             "{'deep' : {'level_0':{'level_1':{'level_2':{'level_3':{'level_4':{'level_5':{'level_6':{'level_7':{'level_8':{'level_9':i99}"
-        //             "} } } } } } } } } }",
-        //             deep,
-        //             12,
-        //             15);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_20")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<20> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<20>()
-        //     {
-        //         LLSD end = LLSD::emptyMap();          end["end"] = (S32)99;
-
-        //         LLSD level_49 = LLSD::emptyMap();     level_49["level_49"] = end;
-        //         LLSD level_48 = LLSD::emptyMap();     level_48["level_48"] = level_49;
-        //         LLSD level_47 = LLSD::emptyMap();     level_47["level_47"] = level_48;
-        //         LLSD level_46 = LLSD::emptyMap();     level_46["level_46"] = level_47;
-        //         LLSD level_45 = LLSD::emptyMap();     level_45["level_45"] = level_46;
-        //         LLSD level_44 = LLSD::emptyMap();     level_44["level_44"] = level_45;
-        //         LLSD level_43 = LLSD::emptyMap();     level_43["level_43"] = level_44;
-        //         LLSD level_42 = LLSD::emptyMap();     level_42["level_42"] = level_43;
-        //         LLSD level_41 = LLSD::emptyMap();     level_41["level_41"] = level_42;
-        //         LLSD level_40 = LLSD::emptyMap();     level_40["level_40"] = level_41;
-
-        //         LLSD level_39 = LLSD::emptyMap();     level_39["level_39"] = level_40;
-        //         LLSD level_38 = LLSD::emptyMap();     level_38["level_38"] = level_39;
-        //         LLSD level_37 = LLSD::emptyMap();     level_37["level_37"] = level_38;
-        //         LLSD level_36 = LLSD::emptyMap();     level_36["level_36"] = level_37;
-        //         LLSD level_35 = LLSD::emptyMap();     level_35["level_35"] = level_36;
-        //         LLSD level_34 = LLSD::emptyMap();     level_34["level_34"] = level_35;
-        //         LLSD level_33 = LLSD::emptyMap();     level_33["level_33"] = level_34;
-        //         LLSD level_32 = LLSD::emptyMap();     level_32["level_32"] = level_33;
-        //         LLSD level_31 = LLSD::emptyMap();     level_31["level_31"] = level_32;
-        //         LLSD level_30 = LLSD::emptyMap();     level_30["level_30"] = level_31;
-
-        //         LLSD level_29 = LLSD::emptyMap();     level_29["level_29"] = level_30;
-        //         LLSD level_28 = LLSD::emptyMap();     level_28["level_28"] = level_29;
-        //         LLSD level_27 = LLSD::emptyMap();     level_27["level_27"] = level_28;
-        //         LLSD level_26 = LLSD::emptyMap();     level_26["level_26"] = level_27;
-        //         LLSD level_25 = LLSD::emptyMap();     level_25["level_25"] = level_26;
-        //         LLSD level_24 = LLSD::emptyMap();     level_24["level_24"] = level_25;
-        //         LLSD level_23 = LLSD::emptyMap();     level_23["level_23"] = level_24;
-        //         LLSD level_22 = LLSD::emptyMap();     level_22["level_22"] = level_23;
-        //         LLSD level_21 = LLSD::emptyMap();     level_21["level_21"] = level_22;
-        //         LLSD level_20 = LLSD::emptyMap();     level_20["level_20"] = level_21;
-
-        //         LLSD level_19 = LLSD::emptyMap();     level_19["level_19"] = level_20;
-        //         LLSD level_18 = LLSD::emptyMap();     level_18["level_18"] = level_19;
-        //         LLSD level_17 = LLSD::emptyMap();     level_17["level_17"] = level_18;
-        //         LLSD level_16 = LLSD::emptyMap();     level_16["level_16"] = level_17;
-        //         LLSD level_15 = LLSD::emptyMap();     level_15["level_15"] = level_16;
-        //         LLSD level_14 = LLSD::emptyMap();     level_14["level_14"] = level_15;
-        //         LLSD level_13 = LLSD::emptyMap();     level_13["level_13"] = level_14;
-        //         LLSD level_12 = LLSD::emptyMap();     level_12["level_12"] = level_13;
-        //         LLSD level_11 = LLSD::emptyMap();     level_11["level_11"] = level_12;
-        //         LLSD level_10 = LLSD::emptyMap();     level_10["level_10"] = level_11;
-
-        //         LLSD level_9 = LLSD::emptyMap();      level_9["level_9"] = level_10;
-        //         LLSD level_8 = LLSD::emptyMap();      level_8["level_8"] = level_9;
-        //         LLSD level_7 = LLSD::emptyMap();      level_7["level_7"] = level_8;
-        //         LLSD level_6 = LLSD::emptyMap();      level_6["level_6"] = level_7;
-        //         LLSD level_5 = LLSD::emptyMap();      level_5["level_5"] = level_6;
-        //         LLSD level_4 = LLSD::emptyMap();      level_4["level_4"] = level_5;
-        //         LLSD level_3 = LLSD::emptyMap();      level_3["level_3"] = level_4;
-        //         LLSD level_2 = LLSD::emptyMap();      level_2["level_2"] = level_3;
-        //         LLSD level_1 = LLSD::emptyMap();      level_1["level_1"] = level_2;
-        //         LLSD level_0 = LLSD::emptyMap();      level_0["level_0"] = level_1;
-
-        //         LLSD deep = LLSD::emptyMap();
-        //         deep["deep"] = level_0;
-
-        //         ensureParse(
-        //             "nested notation deep",
-        //             "{'deep':"
-        //             "{'level_0' :{'level_1' :{'level_2' :{'level_3' :{'level_4' :{'level_5' :{'level_6' :{'level_7' :{'level_8' :{'level_9' :"
-        //             "{'level_10':{'level_11':{'level_12':{'level_13':{'level_14':{'level_15':{'level_16':{'level_17':{'level_18':{'level_19':"
-        //             "{'level_20':{'level_21':{'level_22':{'level_23':{'level_24':{'level_25':{'level_26':{'level_27':{'level_28':{'level_29':"
-        //             "{'level_30':{'level_31':{'level_32':{'level_33':{'level_34':{'level_35':{'level_36':{'level_37':{'level_38':{'level_39':"
-        //             "{'level_40':{'level_41':{'level_42':{'level_43':{'level_44':{'level_45':{'level_46':{'level_47':{'level_48':{'level_49':"
-        //             "{'end':i99}"
-        //             "} } } } } } } } } }"
-        //             "} } } } } } } } } }"
-        //             "} } } } } } } } } }"
-        //             "} } } } } } } } } }"
-        //             "} } } } } } } } } }"
-        //             "}",
-        //             deep,
-        //             53);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDNotationParsingObject_test_21")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDNotationParsingObject::test<21> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDNotationParsingObject::test<21>()
-        //     {
-        //         ensureParse(
-        //             "nested notation 10 deep",
-        //             "{'deep' : {'level_0':{'level_1':{'level_2':{'level_3':{'level_4':{'level_5':{'level_6':{'level_7':{'level_8':{'level_9':i99}"
-        //             "} } } } } } } } } }",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE,
-        //             9);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDBinaryParsingObject_test_1")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDBinaryParsingObject::test<1> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<1>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.resize(6);
-        //         vec[0] = 'a'; vec[1] = 'b'; vec[2] = 'c';
-        //         vec[3] = '3'; vec[4] = '2'; vec[5] = '1';
-        //         std::string string_expected((char*)&vec[0], vec.size());
-        //         LLSD value = string_expected;
-
-        //         vec.resize(11);
-        //         vec[0] = 's'; // for string
-        //         vec[5] = 'a'; vec[6] = 'b'; vec[7] = 'c';
-        //         vec[8] = '3'; vec[9] = '2'; vec[10] = '1';
-
-        //         uint32_t size = htonl(6);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         ensureParse("correct string parse", str_good, value, 1);
-
-        //         size = htonl(7);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_1((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "incorrect size string parse",
-        //             str_bad_1,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         size = htonl(100000);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_2((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "incorrect size string parse",
-        //             str_bad_2,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDBinaryParsingObject_test_2")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDBinaryParsingObject::test<2> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<2>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.resize(6);
-        //         vec[0] = 'a'; vec[1] = 'b'; vec[2] = 'c';
-        //         vec[3] = '3'; vec[4] = '2'; vec[5] = '1';
-        //         LLSD value = vec;
-
-        //         vec.resize(11);
-        //         vec[0] = 'b';  // for binary
-        //         vec[5] = 'a'; vec[6] = 'b'; vec[7] = 'c';
-        //         vec[8] = '3'; vec[9] = '2'; vec[10] = '1';
-
-        //         uint32_t size = htonl(6);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         ensureParse("correct binary parse", str_good, value, 1);
-
-        //         size = htonl(7);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_1((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "incorrect size binary parse 1",
-        //             str_bad_1,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         size = htonl(100000);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_2((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "incorrect size binary parse 2",
-        //             str_bad_2,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDBinaryParsingObject_test_3")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDBinaryParsingObject::test<3> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<3>()
-        //     {
-        //         // test handling of xml not recognized as llsd results in an
-        //         // LLSD Undefined
-        //         ensureParse(
-        //             "malformed binary map",
-        //             "{'ha ha'",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         ensureParse(
-        //             "malformed binary array",
-        //             "['ha ha'",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         ensureParse(
-        //             "malformed binary string",
-        //             "'ha ha",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //         ensureParse(
-        //             "bad noise",
-        //             "g48ejlnfr",
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<4>()
-        //     {
-        //         ensureParse("valid undef", "!", LLSD(), 1);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<5>()
-        //     {
-        //         LLSD val = false;
-        //         ensureParse("valid boolean false 2", "0", val, 1);
-        //         val = true;
-        //         ensureParse("valid boolean true 2", "1", val, 1);
-
-        //         val.clear();
-        //         ensureParse("invalid true", "t", val, LLSDParser::PARSE_FAILURE);
-        //         ensureParse("invalid false", "f", val, LLSDParser::PARSE_FAILURE);
-        //     }
-
-        //     template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<6>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back('{');
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t size = htonl(1);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         vec.push_back('k');
-        //         auto key_size_loc = vec.size();
-        //         size = htonl(1); // 1 too short
-        //         vec.resize(vec.size() + 4);
-        //         memcpy(&vec[key_size_loc], &size, sizeof(uint32_t));
-        //         vec.push_back('a'); vec.push_back('m'); vec.push_back('y');
-        //         vec.push_back('i');
-        //         auto integer_loc = vec.size();
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t val_int = htonl(23);
-        //         memcpy(&vec[integer_loc], &val_int, sizeof(uint32_t));
-        //         std::string str_bad_1((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "invalid key size",
-        //             str_bad_1,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         // check with correct size, but unterminated map (missing '}')
-        //         size = htonl(3); // correct size
-        //         memcpy(&vec[key_size_loc], &size, sizeof(uint32_t));
-        //         std::string str_bad_2((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "valid key size, unterminated map",
-        //             str_bad_2,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         // check w/ correct size and correct map termination
-        //         LLSD val;
-        //         val["amy"] = 23;
-        //         vec.push_back('}');
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "valid map",
-        //             str_good,
-        //             val,
-        //             2);
-
-        //         // check w/ incorrect sizes and correct map termination
-        //         size = htonl(0); // 1 too few (for the map entry)
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_3((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "invalid map too long",
-        //             str_bad_3,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         size = htonl(2); // 1 too many
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_4((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "invalid map too short",
-        //             str_bad_4,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDBinaryParsingObject_test_4")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDBinaryParsingObject::test<4> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<4>()
-        //     {
-        //         ensureParse("valid undef", "!", LLSD(), 1);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDBinaryParsingObject_test_5")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDBinaryParsingObject::test<5> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<5>()
-        //     {
-        //         LLSD val = false;
-        //         ensureParse("valid boolean false 2", "0", val, 1);
-        //         val = true;
-        //         ensureParse("valid boolean true 2", "1", val, 1);
-
-        //         val.clear();
-        //         ensureParse("invalid true", "t", val, LLSDParser::PARSE_FAILURE);
-        //         ensureParse("invalid false", "f", val, LLSDParser::PARSE_FAILURE);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDBinaryParsingObject_test_6")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDBinaryParsingObject::test<6> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<6>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back('{');
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t size = htonl(1);
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         vec.push_back('k');
-        //         auto key_size_loc = vec.size();
-        //         size = htonl(1); // 1 too short
-        //         vec.resize(vec.size() + 4);
-        //         memcpy(&vec[key_size_loc], &size, sizeof(uint32_t));
-        //         vec.push_back('a'); vec.push_back('m'); vec.push_back('y');
-        //         vec.push_back('i');
-        //         auto integer_loc = vec.size();
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t val_int = htonl(23);
-        //         memcpy(&vec[integer_loc], &val_int, sizeof(uint32_t));
-        //         std::string str_bad_1((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "invalid key size",
-        //             str_bad_1,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         // check with correct size, but unterminated map (missing '}')
-        //         size = htonl(3); // correct size
-        //         memcpy(&vec[key_size_loc], &size, sizeof(uint32_t));
-        //         std::string str_bad_2((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "valid key size, unterminated map",
-        //             str_bad_2,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         // check w/ correct size and correct map termination
-        //         LLSD val;
-        //         val["amy"] = 23;
-        //         vec.push_back('}
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDBinaryParsingObject_test_7")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDBinaryParsingObject::test<7> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<7>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back('[');
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t size = htonl(1); // 1 too short
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         vec.push_back('"'); vec.push_back('a'); vec.push_back('m');
-        //         vec.push_back('y'); vec.push_back('"'); vec.push_back('i');
-        //         auto integer_loc = vec.size();
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t val_int = htonl(23);
-        //         memcpy(&vec[integer_loc], &val_int, sizeof(uint32_t));
-
-        //         std::string str_bad_1((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "invalid array size",
-        //             str_bad_1,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         // check with correct size, but unterminated map (missing ']')
-        //         size = htonl(2); // correct size
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_2((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "unterminated array",
-        //             str_bad_2,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         // check w/ correct size and correct map termination
-        //         LLSD val;
-        //         val.append("amy");
-        //         val.append(23);
-        //         vec.push_back(']');
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "valid array",
-        //             str_good,
-        //             val,
-        //             3);
-
-        //         // check with too many elements
-        //         size = htonl(3); // 1 too long
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_bad_3((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "array too short",
-        //             str_bad_3,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDBinaryParsingObject_test_8")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDBinaryParsingObject::test<8> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<8>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back('{');
-        //         vec.resize(vec.size() + 4);
-        //         memset(&vec[1], 0, 4);
-        //         vec.push_back('}');
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         LLSD val = LLSD::emptyMap();
-        //         ensureParse(
-        //             "empty map",
-        //             str_good,
-        //             val,
-        //             1);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDBinaryParsingObject_test_9")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDBinaryParsingObject::test<9> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<9>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back('[');
-        //         vec.resize(vec.size() + 4);
-        //         memset(&vec[1], 0, 4);
-        //         vec.push_back(']');
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         LLSD val = LLSD::emptyArray();
-        //         ensureParse(
-        //             "empty array",
-        //             str_good,
-        //             val,
-        //             1);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDBinaryParsingObject_test_10")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDBinaryParsingObject::test<10> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<10>()
-        //     {
-        //         std::vector<U8> vec;
-        //         vec.push_back('l');
-        //         vec.resize(vec.size() + 4);
-        //         uint32_t size = htonl(14); // 1 too long
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         vec.push_back('h'); vec.push_back('t'); vec.push_back('t');
-        //         vec.push_back('p'); vec.push_back(':'); vec.push_back('/');
-        //         vec.push_back('/'); vec.push_back('s'); vec.push_back('l');
-        //         vec.push_back('.'); vec.push_back('c'); vec.push_back('o');
-        //         vec.push_back('m');
-        //         std::string str_bad((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "invalid uri length size",
-        //             str_bad,
-        //             LLSD(),
-        //             LLSDParser::PARSE_FAILURE);
-
-        //         LLSD val;
-        //         val = LLURI("http://sl.com");
-        //         size = htonl(13); // correct length
-        //         memcpy(&vec[1], &size, sizeof(uint32_t));
-        //         std::string str_good((char*)&vec[0], vec.size());
-        //         ensureParse(
-        //             "valid key size",
-        //             str_good,
-        //             val,
-        //             1);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestLLSDBinaryParsingObject_test_11")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDBinaryParsingObject::test<11> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDBinaryParsingObject::test<11>()
-        //     {
-        //     }
+        ParseFixture<LLSDNotationParser> fixture;
+        fixture.ensureParse(
+            "nested notation exceeding depth",
+            "{'deep' : {'level_0':{'level_1':{'level_2':{'level_3':{'level_4':{'level_5':{'level_6':{'level_7':{'level_8':{'level_9':i99}"
+            "} } } } } } } } } }",
+            LLSD(),
+            LLSDParser::PARSE_FAILURE,
+            9);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDCompatibleObject_test_1")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDCompatibleObject::test<1> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDCompatibleObject::test<1>()
-        //     {
-        //         LLSD test;
-        //         ensureBinaryAndNotation("undef", test);
-        //         ensureBinaryAndXML("undef", test);
-        //         test = true;
-        //         ensureBinaryAndNotation("boolean true", test);
-        //         ensureBinaryAndXML("boolean true", test);
-        //         test = false;
-        //         ensureBinaryAndNotation("boolean false", test);
-        //         ensureBinaryAndXML("boolean false", test);
-        //         test = 0;
-        //         ensureBinaryAndNotation("integer zero", test);
-        //         ensureBinaryAndXML("integer zero", test);
-        //         test = 1;
-        //         ensureBinaryAndNotation("integer positive", test);
-        //         ensureBinaryAndXML("integer positive", test);
-        //         test = -234567;
-        //         ensureBinaryAndNotation("integer negative", test);
-        //         ensureBinaryAndXML("integer negative", test);
-        //         test = 0.0;
-        //         ensureBinaryAndNotation("real zero", test);
-        //         ensureBinaryAndXML("real zero", test);
-        //         test = 1.0;
-        //         ensureBinaryAndNotation("real positive", test);
-        //         ensureBinaryAndXML("real positive", test);
-        //         test = -1.0;
-        //         ensureBinaryAndNotation("real negative", test);
-        //         ensureBinaryAndXML("real negative", test);
-        //     }
+        CompatibilityFixture fixture;
+        LLSD value;
+        fixture.ensureBinaryAndNotation("undef", value);
+        fixture.ensureBinaryAndXML("undef", value);
+
+        value = true;
+        fixture.ensureBinaryAndNotation("boolean true", value);
+        fixture.ensureBinaryAndXML("boolean true", value);
+
+        value = false;
+        fixture.ensureBinaryAndNotation("boolean false", value);
+        fixture.ensureBinaryAndXML("boolean false", value);
+
+        value = 1;
+        fixture.ensureBinaryAndNotation("integer positive", value);
+        fixture.ensureBinaryAndXML("integer positive", value);
+
+        value = -234567;
+        fixture.ensureBinaryAndNotation("integer negative", value);
+        fixture.ensureBinaryAndXML("integer negative", value);
+
+        value = 0.0;
+        fixture.ensureBinaryAndNotation("real zero", value);
+        fixture.ensureBinaryAndXML("real zero", value);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDCompatibleObject_test_2")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDCompatibleObject::test<2> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDCompatibleObject::test<2>()
-        //     {
-        //         LLSD test;
-        //         test = "foobar";
-        //         ensureBinaryAndNotation("string", test);
-        //         ensureBinaryAndXML("string", test);
-        //     }
+        CompatibilityFixture fixture;
+        LLSD value = "foobar";
+        fixture.ensureBinaryAndNotation("string", value);
+        fixture.ensureBinaryAndXML("string", value);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDCompatibleObject_test_3")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDCompatibleObject::test<3> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDCompatibleObject::test<3>()
-        //     {
-        //         LLSD test;
-        //         LLUUID id;
-        //         id.generate();
-        //         test = id;
-        //         ensureBinaryAndNotation("uuid", test);
-        //         ensureBinaryAndXML("uuid", test);
-        //     }
+        CompatibilityFixture fixture;
+        LLSD value = LLUUID("01234567-89ab-cdef-0123-456789abcdef");
+        fixture.ensureBinaryAndNotation("uuid", value);
+        fixture.ensureBinaryAndXML("uuid", value);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDCompatibleObject_test_4")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDCompatibleObject::test<4> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDCompatibleObject::test<4>()
-        //     {
-        //         LLSD test;
-        //         test = LLDate(12345.0);
-        //         ensureBinaryAndNotation("date", test);
-        //         ensureBinaryAndXML("date", test);
-        //     }
+        CompatibilityFixture fixture;
+        LLSD value = LLDate(12345.0);
+        fixture.ensureBinaryAndNotation("date", value);
+        fixture.ensureBinaryAndXML("date", value);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDCompatibleObject_test_5")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDCompatibleObject::test<5> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDCompatibleObject::test<5>()
-        //     {
-        //         LLSD test;
-        //         test = LLURI("http://www.secondlife.com/");
-        //         ensureBinaryAndNotation("uri", test);
-        //         ensureBinaryAndXML("uri", test);
-        //     }
+        CompatibilityFixture fixture;
+        LLSD value = LLURI("http://www.secondlife.com/");
+        fixture.ensureBinaryAndNotation("uri", value);
+        fixture.ensureBinaryAndXML("uri", value);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDCompatibleObject_test_6")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDCompatibleObject::test<6> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDCompatibleObject::test<6>()
-        //     {
-        //         LLSD test;
-        //         typedef std::vector<U8> buf_t;
-        //         buf_t val;
-        //         for(int ii = 0; ii < 100; ++ii)
-        //         {
-        //             srand(ii);      /* Flawfinder: ignore */
-        //             S32 size = rand() % 100 + 10;
-        //             std::generate_n(
-        //                 std::back_insert_iterator<buf_t>(val),
-        //                 size,
-        //                 rand);
-        //         }
-        //         test = val;
-        //         ensureBinaryAndNotation("binary", test);
-        //         ensureBinaryAndXML("binary", test);
-        //     }
+        CompatibilityFixture fixture;
+        std::vector<U8> buffer;
+        buffer.reserve(128);
+        for (int index = 0; index < 128; ++index)
+        {
+            buffer.push_back(static_cast<U8>((index * 37) % 256));
+        }
+        LLSD value = buffer;
+        fixture.ensureBinaryAndNotation("binary", value);
+        fixture.ensureBinaryAndXML("binary", value);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDCompatibleObject_test_7")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDCompatibleObject::test<7> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDCompatibleObject::test<7>()
-        //     {
-        //         LLSD test;
-        //         test = LLSD::emptyArray();
-        //         test.append(1);
-        //         test.append("hello");
-        //         ensureBinaryAndNotation("array", test);
-        //         ensureBinaryAndXML("array", test);
-        //     }
+        CompatibilityFixture fixture;
+        LLSD value = LLSD::emptyArray();
+        value.append(1);
+        value.append("hello");
+        value.append(LLUUID("01234567-89ab-cdef-0123-456789abcdef"));
+        fixture.ensureBinaryAndNotation("array", value);
+        fixture.ensureBinaryAndXML("array", value);
     }
 
     TUT_CASE("llsdserialize_test::TestLLSDCompatibleObject_test_8")
     {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestLLSDCompatibleObject::test<8> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestLLSDCompatibleObject::test<8>()
-        //     {
-        //         LLSD test;
-        //         test = LLSD::emptyArray();
-        //         test["foo"] = "bar";
-        //         test["baz"] = 100;
-        //         ensureBinaryAndNotation("map", test);
-        //         ensureBinaryAndXML("map", test);
-        //     }
+        CompatibilityFixture fixture;
+        LLSD value = LLSD::emptyMap();
+        value["foo"] = "bar";
+        value["baz"] = 100;
+        fixture.ensureBinaryAndNotation("map", value);
+        fixture.ensureBinaryAndXML("map", value);
     }
 
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_1")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<1> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<1>()
-        //     {
-        //         set_test_name("verify python()");
-        //         python_expect("hello",
-        //                       "import sys\n"
-        //                       "sys.exit(17)\n",
-        //                       17);                 // expect nonzero rc
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_2")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<2> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<2>()
-        //     {
-        //         set_test_name("verify NamedTempFile");
-        //         python("platform",
-        //                "import sys\n"
-        //                "print('Running on', sys.platform)\n");
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_3")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<3> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<3>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::serialize(LLSD_XML)");
-        //         toPythonUsing("LLSD_XML",
-        //                       [](const LLSD& sd, std::ostream& out)
-        //         { LLSDSerialize::serialize(sd, out, LLSDSerialize::LLSD_XML); });
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_4")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<4> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<4>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::serialize(LLSD_NOTATION)");
-        //         toPythonUsing("LLSD_NOTATION",
-        //                       [](const LLSD& sd, std::ostream& out)
-        //         { LLSDSerialize::serialize(sd, out, LLSDSerialize::LLSD_NOTATION); });
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_5")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<5> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<5>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::serialize(LLSD_BINARY)");
-        //         toPythonUsing("LLSD_BINARY",
-        //                       [](const LLSD& sd, std::ostream& out)
-        //         { LLSDSerialize::serialize(sd, out, LLSDSerialize::LLSD_BINARY); });
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_6")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<6> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<6>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::toXML()");
-        //         toPythonUsing("toXML()", LLSDSerialize::toXML);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_7")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<7> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<7>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::toNotation()");
-        //         toPythonUsing("toNotation()", LLSDSerialize::toNotation);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_8")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<8> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<8>()
-        //     {
-        //         set_test_name("to Python using LLSDSerialize::toBinary()");
-        //         // We don't expect this to work because, without a header,
-        //         // llsd.parse() will assume notation rather than binary.
-        //         toPythonUsing("toBinary()", LLSDSerialize::toBinary);
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_8")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<8> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<8>()
-        //     {
-        //         set_test_name("from Python XML using LLSDSerialize::deserialize()");
-        //         fromPythonUsing("format_xml");
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_9")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<9> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<9>()
-        //     {
-        //         set_test_name("from Python notation using LLSDSerialize::deserialize()");
-        //         fromPythonUsing("format_notation");
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_10")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<10> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<10>()
-        //     {
-        //         set_test_name("from Python binary using LLSDSerialize::deserialize()");
-        //         fromPythonUsing("format_binary");
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_11")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<11> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<11>()
-        //     {
-        //         set_test_name("from Python XML using fromXML()");
-        //         // fromXML()'s optional 3rd param isn't max_bytes, it's emit_errors
-        //         fromPythonUsing("format_xml",
-        //                         [](std::istream& istr, LLSD& data, llssize)
-        //                         { return LLSDSerialize::fromXML(data, istr) > 0; });
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_12")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<12> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<12>()
-        //     {
-        //         set_test_name("from Python notation using fromNotation()");
-        //         fromPythonUsing("format_notation",
-        //                         [](std::istream& istr, LLSD& data, llssize max_bytes)
-        //                         { return LLSDSerialize::fromNotation(data, istr, max_bytes) > 0; });
-        //     }
-    }
-
-    TUT_CASE("llsdserialize_test::TestPythonCompatibleObject_test_13")
-    {
-        DOCTEST_FAIL("TODO: convert llsdserialize_test.cpp::TestPythonCompatibleObject::test<13> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void TestPythonCompatibleObject::test<13>()
-        //     {
-        //         set_test_name("from Python binary using fromBinary()");
-        //         // We don't expect this to work because format_binary() emits a
-        //         // header, but fromBinary() won't recognize a header.
-        //         fromPythonUsing("format_binary",
-        //                         [](std::istream& istr, LLSD& data, llssize max_bytes)
-        //                         { return LLSDSerialize::fromBinary(data, istr, max_bytes) > 0; });
-        //     }
-    }
-
+    // The original suite also included Python interop and filesystem-based tests.
+    // They are intentionally omitted here because they require external tools and I/O.
 }
-

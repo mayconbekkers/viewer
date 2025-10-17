@@ -92,6 +92,10 @@ target_include_directories( llcorehttp INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 # lead to circular dependencies (or in case of cmake, the first project declaring it's dependencies wins)
 target_include_directories( llcorehttp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../llmessage)
 
+if (LL_TESTS)
+  add_subdirectory(tests_doctest)
+endif ()
+
 # tests
 set(LLCOREHTTP_TESTS ON CACHE BOOL
     "Build and run llcorehttp integration tests specifically")

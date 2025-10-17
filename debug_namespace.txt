@@ -1,0 +1,4 @@
+FILE: apply_test.cpp
+FILE: apply_test.cpp
+"    namespace statics\n    {\n        /*------------------------------ data ------------------------------*/\n        // Although we're using types from the LLSD namespace, we're not\n        // construct"
+---

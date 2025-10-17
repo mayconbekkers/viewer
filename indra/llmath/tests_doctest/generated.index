@@ -1,0 +1,16 @@
+alignment_test.cpp -> alignment_test_doctest.cpp
+llbbox_test.cpp -> llbbox_test_doctest.cpp
+llbboxlocal_test.cpp -> llbboxlocal_test_doctest.cpp
+llmodularmath_test.cpp -> llmodularmath_test_doctest.cpp
+llquaternion_test.cpp -> llquaternion_test_doctest.cpp
+llrect_test.cpp -> llrect_test_doctest.cpp
+m3math_test.cpp -> m3math_test_doctest.cpp
+mathmisc_test.cpp -> mathmisc_test_doctest.cpp
+v2math_test.cpp -> v2math_test_doctest.cpp
+v3color_test.cpp -> v3color_test_doctest.cpp
+v3dmath_test.cpp -> v3dmath_test_doctest.cpp
+v3math_test.cpp -> v3math_test_doctest.cpp
+v4color_test.cpp -> v4color_test_doctest.cpp
+v4coloru_test.cpp -> v4coloru_test_doctest.cpp
+v4math_test.cpp -> v4math_test_doctest.cpp
+xform_test.cpp -> xform_test_doctest.cpp

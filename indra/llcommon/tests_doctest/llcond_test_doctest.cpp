@@ -1,57 +1,55 @@
-// ---------------------------------------------------------------------------
-// Auto-generated from llcond_test.cpp at 2025-10-16T18:47:16Z
-// This file is a TODO stub produced by gen_tut_to_doctest.py.
-// ---------------------------------------------------------------------------
+// DOCTEST_SKIP_AUTOGEN: manual suite maintained in doctest
 #include "doctest.h"
-#include "ll_doctest_helpers.h"
-#include "tut_compat_doctest.h"
+#include "indra/test/ll_doctest_helpers.h"
 #include "linden_common.h"
 #include "llcond.h"
 #include "llcoros.h"
 
-TUT_SUITE("llcommon")
+namespace
 {
-    TUT_CASE("llcond_test::object_test_1")
+class CoroScope
+{
+public:
+    CoroScope() = default;
+    CoroScope(const CoroScope&) = delete;
+    CoroScope& operator=(const CoroScope&) = delete;
+    ~CoroScope()
     {
-        DOCTEST_FAIL("TODO: convert llcond_test.cpp::object::test<1> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void object::test<1>()
-        //     {
-        //         set_test_name("Immediate gratification");
-        //         cond.set_one(1);
-        //         ensure("wait_for_equal() failed",
-        //                cond.wait_for_equal(F32Milliseconds(1), 1));
-        //         ensure("wait_for_unequal() should have failed",
-        //                ! cond.wait_for_unequal(F32Milliseconds(1), 1));
-        //     }
+        LLCoros::deleteSingleton();
+    }
+};
+} // namespace
+
+TEST_SUITE("llcond")
+{
+    TEST_CASE("Immediate gratification")
+    {
+        CoroScope scope_guard;
+        LLScalarCond<int> cond{0};
+
+        cond.set_one(1);
+        CHECK(cond.wait_for_equal(F32Milliseconds(1), 1));
+        CHECK_FALSE(cond.wait_for_unequal(F32Milliseconds(1), 1));
     }
 
-    TUT_CASE("llcond_test::object_test_2")
+    TEST_CASE("Simple two-coroutine test")
     {
-        DOCTEST_FAIL("TODO: convert llcond_test.cpp::object::test<2> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void object::test<2>()
-        //     {
-        //         set_test_name("Simple two-coroutine test");
-        //         LLCoros::instance().launch(
-        //             "test<2>",
-        //             [this]()
-        //             {
-        //                 // Lambda immediately entered -- control comes here first.
-        //                 ensure_equals(cond.get(), 0);
-        //                 cond.set_all(1);
-        //                 cond.wait_equal(2);
-        //                 ensure_equals(cond.get(), 2);
-        //                 cond.set_all(3);
-        //             });
-        //         // Main coroutine is resumed only when the lambda waits.
-        //         ensure_equals(cond.get(), 1);
-        //         cond.set_all(2);
-        //         cond.wait_equal(3);
-        //     }
-    }
+        CoroScope scope_guard;
+        LLScalarCond<int> cond{0};
 
+        auto launch_name = LLCoros::instance().launch(
+            "llcond_test_simple_two_coroutine",
+            [&cond]() {
+                CHECK_EQ(cond.get(), 0);
+                cond.set_all(1);
+                cond.wait_equal(2);
+                CHECK_EQ(cond.get(), 2);
+                cond.set_all(3);
+            });
+        (void)launch_name;
+
+        CHECK_EQ(cond.get(), 1);
+        cond.set_all(2);
+        cond.wait_equal(3);
+    }
 }
-

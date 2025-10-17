@@ -105,6 +105,7 @@ target_include_directories( llmath  INTERFACE   ${CMAKE_CURRENT_SOURCE_DIR})
 # Add tests
 if (LL_TESTS)
   include(LLAddBuildTest)
+  include(Doctest)
   # UNIT TESTS
   SET(llmath_TEST_SOURCE_FILES
     llbboxlocal.cpp
@@ -130,4 +131,6 @@ if (LL_TESTS)
   LL_ADD_INTEGRATION_TEST(v3math v3math.cpp "${test_libs}")
   LL_ADD_INTEGRATION_TEST(v4math v4math.cpp "${test_libs}")
   LL_ADD_INTEGRATION_TEST(xform xform.cpp "${test_libs}")
+
+  add_subdirectory(tests_doctest)
 endif (LL_TESTS)

@@ -1,83 +1,101 @@
-// ---------------------------------------------------------------------------
-// Auto-generated from lazyeventapi_test.cpp at 2025-10-16T18:47:16Z
-// This file is a TODO stub produced by gen_tut_to_doctest.py.
-// ---------------------------------------------------------------------------
+// DOCTEST_SKIP_AUTOGEN: manual suite maintained in doctest
 #include "doctest.h"
-#include "ll_doctest_helpers.h"
-#include "tut_compat_doctest.h"
+#include "indra/test/ll_doctest_helpers.h"
 #include "linden_common.h"
 #include "lazyeventapi.h"
 #include "llevents.h"
 #include "llsdutil.h"
 
-TUT_SUITE("llcommon")
+#include <vector>
+
+namespace
 {
-    TUT_CASE("lazyeventapi_test::object_test_1")
+LLSD gData;
+
+class PumpScope
+{
+public:
+    PumpScope() { gData.clear(); }
+    PumpScope(const PumpScope&) = delete;
+    PumpScope& operator=(const PumpScope&) = delete;
+    ~PumpScope()
     {
-        DOCTEST_FAIL("TODO: convert lazyeventapi_test.cpp::object::test<1> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void object::test<1>()
-        //     {
-        //         set_test_name("LazyEventAPI");
-        //         // this is where the magic (should) happen
-        //         // 'register' still a keyword until C++17
-        //         MyRegistrar regster;
-        //         LLEventPumps::instance().obtain("Test").post(llsd::map("op", "set", "data", "hey"));
-        //         ensure_equals("failed to set data", data.asString(), "hey");
-        //     }
+        LLEventPumps::deleteSingleton();
+        gData.clear();
+    }
+};
+
+class MyListener final: public LLEventAPI
+{
+public:
+    explicit MyListener(const LL::LazyEventAPIParams& params):
+        LLEventAPI(params) {}
+
+    void set_data(const LLSD& event)
+    {
+        gData = event["data"];
+    }
+};
+
+class MyRegistrar final: public LL::LazyEventAPI<MyListener>
+{
+    using super = LL::LazyEventAPI<MyListener>;
+    using super::listener;
+
+public:
+    MyRegistrar():
+        super("Test", "This is a test LLEventAPI")
+    {
+        add("set", "This is a set operation", &listener::set_data);
+    }
+};
+} // namespace
+
+TEST_SUITE("lazyeventapi")
+{
+    TEST_CASE("LazyEventAPI dispatches set operation")
+    {
+        PumpScope scope;
+        MyRegistrar registrar;
+        LLEventPumps::instance().obtain("Test").post(llsd::map("op", "set", "data", "hey"));
+        CHECK_EQ(gData.asString(), "hey");
     }
 
-    TUT_CASE("lazyeventapi_test::object_test_2")
+    TEST_CASE("No LazyEventAPI instance ignores posts")
     {
-        DOCTEST_FAIL("TODO: convert lazyeventapi_test.cpp::object::test<2> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void object::test<2>()
-        //     {
-        //         set_test_name("No LazyEventAPI");
-        //         // Because the MyRegistrar declaration in test<1>() is local, because
-        //         // it has been destroyed, we fully expect NOT to reach a MyListener
-        //         // instance with this post.
-        //         LLEventPumps::instance().obtain("Test").post(llsd::map("op", "set", "data", "moot"));
-        //         ensure("accidentally set data", ! data.isDefined());
-        //     }
+        PumpScope scope;
+        LLEventPumps::instance().obtain("Test").post(llsd::map("op", "set", "data", "moot"));
+        CHECK_FALSE(gData.isDefined());
     }
 
-    TUT_CASE("lazyeventapi_test::object_test_3")
+    TEST_CASE("LazyEventAPI exposes metadata")
     {
-        DOCTEST_FAIL("TODO: convert lazyeventapi_test.cpp::object::test<3> from TUT to doctest");
-        // Original snippet:
-        // template<> template<>
-        //     void object::test<3>()
-        //     {
-        //         set_test_name("LazyEventAPI metadata");
-        //         MyRegistrar regster;
-        //         // Of course we have 'regster' in hand; we don't need to search for
-        //         // it. But this next test verifies that we can find (all) LazyEventAPI
-        //         // instances using LazyEventAPIBase::instance_snapshot. Normally we
-        //         // wouldn't search; normally we'd just look at each instance in the
-        //         // loop body.
-        //         const MyRegistrar* found = nullptr;
-        //         for (const auto& registrar : LL::LazyEventAPIBase::instance_snapshot())
-        //             if ((found = dynamic_cast<const MyRegistrar*>(&registrar)))
-        //                 break;
-        //         ensure("Failed to find MyRegistrar via LLInstanceTracker", found);
+        PumpScope scope;
+        MyRegistrar registrar;
 
-        //         ensure_equals("wrong API name", found->getName(), "Test");
-        //         ensure_contains("wrong API desc", found->getDesc(), "test LLEventAPI");
-        //         ensure_equals("wrong API field", found->getDispatchKey(), "op");
-        //         // Normally we'd just iterate over *found. But for test purposes,
-        //         // actually capture the range of NameDesc pairs in a vector.
-        //         std::vector<LL::LazyEventAPIBase::NameDesc> ops{ found->begin(), found->end() };
-        //         ensure_equals("failed to find operations", ops.size(), 1);
-        //         ensure_equals("wrong operation name", ops[0].first, "set");
-        //         ensure_contains("wrong operation desc", ops[0].second, "set operation");
-        //         LLSD metadata{ found->getMetadata(ops[0].first) };
-        //         ensure_equals("bad metadata name", metadata["name"].asString(), ops[0].first);
-        //         ensure_equals("bad metadata desc", metadata["desc"].asString(), ops[0].second);
-        //     }
+        const MyRegistrar* found = nullptr;
+        for (const auto& tracker : LL::LazyEventAPIBase::instance_snapshot())
+        {
+            found = dynamic_cast<const MyRegistrar*>(&tracker);
+            if (found)
+            {
+                break;
+            }
+        }
+        REQUIRE(found != nullptr);
+        CHECK_EQ(found->getName(), "Test");
+        CHECK(found->getDesc().find("test LLEventAPI") != std::string::npos);
+        CHECK_EQ(found->getDispatchKey(), "op");
+
+        std::vector<LL::LazyEventAPIBase::NameDesc> ops{ found->begin(), found->end() };
+        REQUIRE_EQ(ops.size(), 1u);
+        CHECK_EQ(ops[0].first, "set");
+        CHECK(ops[0].second.find("set operation") != std::string::npos);
+
+        LLSD metadata = found->getMetadata(ops[0].first);
+        CHECK_EQ(metadata["name"].asString(), ops[0].first);
+        CHECK_EQ(metadata["desc"].asString(), ops[0].second);
     }
-
 }
-
+#// DOCTEST_SKIP_AUTOGEN: manual suite maintained in doctest
+#include "doctest.h"

@@ -30,6 +30,10 @@
 
 #include <cstdlib>
 
+#if LL_WINDOWS
+#include <cwchar>
+#endif
+
 #ifdef LL_DARWIN
 #include <sys/types.h>
 #include <unistd.h>
@@ -229,7 +233,10 @@ bool LLApp::parseCommandOptions(int argc, wchar_t** wargv)
         if(wargv[ii][1] == '-') ++offset;
 
 #if LL_WINDOWS
-    name.assign(utf16str_to_utf8str(&wargv[ii][offset]));
+    const wchar_t* raw_name = &wargv[ii][offset];
+    name.assign(utf16str_to_utf8str(
+        reinterpret_cast<const U16*>(raw_name),
+        wcslen(raw_name)));
 #else
     name.assign(wstring_to_utf8str(&wargv[ii][offset]));
 #endif
@@ -253,7 +260,10 @@ bool LLApp::parseCommandOptions(int argc, wchar_t** wargv)
         ++ii;
 
 #if LL_WINDOWS
-    value.assign(utf16str_to_utf8str((wargv[ii])));
+    const wchar_t* raw_value = wargv[ii];
+    value.assign(utf16str_to_utf8str(
+        reinterpret_cast<const U16*>(raw_value),
+        wcslen(raw_value)));
 #else
     value.assign(wstring_to_utf8str((wargv[ii])));
 #endif
@@ -763,4 +773,3 @@ bool unix_post_minidump_callback(const char *dump_dir,
 #endif
 }
 #endif // !WINDOWS
-

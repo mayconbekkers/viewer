@@ -1,0 +1,4 @@
+﻿"target","module","test_cases","assertions","runtime_seconds","ctest_cmd"
+"llcommon_doctest","llcommon","100","1400949","2.61","ctest -C RelWithDebInfo -R llcommon_doctest -V"
+"llcorehttp_doctest","llcorehttp","34","184","0.56","ctest -C RelWithDebInfo -R llcorehttp_doctest -V"
+"llmath_doctest","llmath","93","526","0.47","ctest -C RelWithDebInfo -R llmath_doctest -V"

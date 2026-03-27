@@ -2,6 +2,7 @@
 #include "doctest.h"
 #include "indra/test/ll_doctest_helpers.h"
 #include "indra/test/tut_compat_doctest.h"
+#include <iostream>
 #include "linden_common.h"
 #include "../llmath.h"
 #include "../llsimdmath.h"

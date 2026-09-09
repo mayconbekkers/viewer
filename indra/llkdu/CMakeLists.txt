@@ -36,7 +36,7 @@ if (USE_KDU)
   # Add tests
   if (LL_TESTS)
     include(LLAddBuildTest)
-    include(Tut)
+    include(Doctest)
     SET(llkdu_TEST_SOURCE_FILES
       llimagej2ckdu.cpp
       )
@@ -51,6 +51,7 @@ if (USE_KDU)
     set_property( SOURCE ${llkdu_TEST_SOURCE_FILES} PROPERTY LL_TEST_ADDITIONAL_INCLUDE_DIRS ${llimage_include_dir})
 
     LL_ADD_PROJECT_UNIT_TESTS(llkdu "${llkdu_TEST_SOURCE_FILES}")
+    add_subdirectory(tests_doctest)
   endif (LL_TESTS)
 
 endif (USE_KDU)
